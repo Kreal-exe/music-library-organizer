@@ -18,6 +18,23 @@ import (
 	"time"
 )
 
+// NotFound says no source had lyrics confident enough to embed, and carries
+// the closest thing that did come back.
+//
+// A collection of unreleased music is full of tracks a database holds under
+// somebody else's name — an alias, a side project, whoever it considers the
+// lead — and refusing those silently leaves the user with nothing to go on.
+// Named, they can be looked at and taken by hand.
+type NotFound struct {
+	Closest Match
+}
+
+func (e *NotFound) Error() string { return ErrNotFound.Error() }
+func (e *NotFound) Unwrap() error { return ErrNotFound }
+
+// How close a rejected candidate has to be before it is worth mentioning.
+const worthMentioning = 0.45
+
 // ErrNotFound means no source had lyrics confident enough to embed.
 var ErrNotFound = errors.New("no lyrics found")
 
@@ -36,6 +53,11 @@ type Query struct {
 	// tags name the wrong artist: a download keeps "Artist - Title" in the
 	// file name long after the artist field has been overwritten.
 	Path string
+
+	// Guests are the names credited in the title before it was cleaned up.
+	// They are kept because a database files a collaboration under whoever it
+	// considers the lead, which is often one of them.
+	Guests []string
 }
 
 // Match is one candidate set of lyrics.
@@ -113,6 +135,7 @@ func (f *Finder) Find(ctx context.Context, q Query) (Match, error) {
 
 	var firstErr error
 	answered := 0
+	closest := Match{}
 
 	for _, round := range f.rounds {
 		for _, attempt := range searches {
@@ -133,6 +156,9 @@ func (f *Finder) Find(ctx context.Context, q Query) (Match, error) {
 				best := Match{}
 				for _, candidate := range results {
 					candidate.Score = score(attempt, candidate)
+					if candidate.Score > closest.Score {
+						closest = candidate
+					}
 					if candidate.Lyrics != "" && candidate.Score > best.Score {
 						best = candidate
 					}
@@ -152,6 +178,9 @@ func (f *Finder) Find(ctx context.Context, q Query) (Match, error) {
 	// there, and saying "503" would send the user looking for a fault.
 	if answered == 0 && firstErr != nil {
 		return Match{}, firstErr
+	}
+	if closest.Score >= worthMentioning {
+		return Match{}, &NotFound{Closest: closest}
 	}
 	return Match{}, ErrNotFound
 }
@@ -193,17 +222,23 @@ func attempts(q Query) []Query {
 		}
 	}
 
-	titles := []string{cleanTitle(q.Title)}
-	if bare := bareTitle(q.Title); !strings.EqualFold(bare, titles[0]) {
+	// The title may repeat the artist, and both readings of it are searched
+	// for with that taken off.
+	named := withoutLeadingArtist(strings.TrimSpace(q.Title), append(artists, q.Artist, fileArtist))
+
+	titles := []string{cleanTitle(named)}
+	if bare := bareTitle(named); !strings.EqualFold(bare, titles[0]) {
 		titles = append(titles, bare)
 	}
-	if fileTitle = cleanTitle(fileTitle); fileTitle != "" {
+	if fileTitle = cleanTitle(withoutLeadingArtist(fileTitle, artists)); fileTitle != "" {
 		titles = append(titles, fileTitle)
 	}
 
 	if len(artists) == 0 || titles[0] == "" {
 		return nil
 	}
+
+	guests := guestsIn(q.Title + " " + q.Artist)
 
 	var out []Query
 	seen := map[string]bool{}
@@ -218,7 +253,7 @@ func attempts(q Query) []Query {
 		seen[key] = true
 
 		attempt := q
-		attempt.Artist, attempt.Title = artist, title
+		attempt.Artist, attempt.Title, attempt.Guests = artist, title, guests
 		out = append(out, attempt)
 	}
 

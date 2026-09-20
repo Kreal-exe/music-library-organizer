@@ -1416,7 +1416,7 @@ window.runtime.EventsOn("lyrics:track", (result) => {
     logLyrics(`✓ ${label}  [${result.source}]`, "found");
   } else if (result.status === "missing") {
     lyricsCounts.missing++;
-    logLyrics(`· ${label} — not found`, "missing");
+    logLyrics(`· ${label} — not found${result.detail ? ` (${result.detail})` : ""}`, "missing");
   } else {
     lyricsCounts.failed++;
     logLyrics(`✗ ${label} — ${result.detail}`, "error");

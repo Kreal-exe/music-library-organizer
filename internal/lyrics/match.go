@@ -37,12 +37,23 @@ func cleanTitle(title string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(title), " "))
 }
 
-var guestSuffix = regexp.MustCompile(`(?i)\s+\b(?:feat|ft|featuring|w/)\b\.?\s+`)
+// A guest credit, in either alphabet: "feat.", "ft", and the "п.у." a Russian
+// release writes for the same thing.
+//
+// The Russian spellings are kept out of the \b guard, because a word boundary
+// here is an ASCII one: it never matches beside a Cyrillic letter, and the
+// credit would stay in the name that goes to the databases.
+var guestSuffix = regexp.MustCompile(`(?i)\s+(?:\b(?:feat|ft|featuring|w/)\b\.?|п\.\s?у\.?|при участии|совместно с)\s+`)
 
-// Anything left inside brackets, plus a bare "v1" at the end.
+// The same credit as a title carries it, where a bracket usually holds it:
+// "Boomerang (feat. Lil Yachty)".
+var guestCredit = regexp.MustCompile(`(?i)[\(\[]?\s*(?:\b(?:feat|ft|featuring|with)\b\.?|п\.\s?у\.?|при участии)\s+`)
+
+// Anything left inside brackets, and the markers an unreleased recording
+// carries at the end of its name.
 var (
 	bracketedAside = regexp.MustCompile(`[\(\[][^\)\]]*[\)\]]`)
-	versionSuffix  = regexp.MustCompile(`(?i)\s+v\.?\d+$`)
+	versionSuffix  = regexp.MustCompile(`(?i)\s+(?:v\.?\d+|og|stem|stems|solo|snippet|master|cdq)$`)
 )
 
 // bareTitle is the song's name with every qualifier taken off, including the
@@ -139,6 +150,20 @@ func score(q Query, candidate Match) float64 {
 	if shared := 0.9 * wordOverlap(q.Artist, candidate.Artist); shared > artist {
 		artist = shared
 	}
+
+	// A collaboration is filed under whoever the database considers the lead,
+	// which is often the guest named in our title: "Act Right (feat. GDo)" is
+	// GDo's song there. The guest is on the track either way, so a candidate
+	// credited to them is credited to somebody who was in the room.
+	for _, guest := range q.Guests {
+		named := 0.95 * similarity(guest, candidate.Artist)
+		if shared := 0.9 * wordOverlap(guest, candidate.Artist); shared > named {
+			named = shared
+		}
+		if named > artist {
+			artist = named
+		}
+	}
 	if shared := 0.9 * wordOverlap(q.Title, candidate.Title); shared > title {
 		title = shared
 	}
@@ -161,6 +186,50 @@ func score(q Query, candidate Match) float64 {
 
 	return clamp(total)
 }
+
+// withoutLeadingArtist drops the "Artist - " that a title repeats.
+//
+// A file named "Artist - Title.mp3" is often tagged with the whole of that as
+// its title, and searching for the artist twice finds nothing at all.
+func withoutLeadingArtist(title string, artists []string) string {
+	for _, artist := range artists {
+		if artist == "" {
+			continue
+		}
+		for _, separator := range []string{" - ", " — ", " – ", " -- "} {
+			prefix := artist + separator
+			if len(title) > len(prefix) && strings.EqualFold(title[:len(prefix)], prefix) {
+				return strings.TrimSpace(title[len(prefix):])
+			}
+		}
+	}
+	return title
+}
+
+// guestsIn reads the names credited after a "feat." in a title.
+func guestsIn(title string) []string {
+	loc := guestCredit.FindStringIndex(title)
+	if loc == nil {
+		return nil
+	}
+
+	// The credit runs to the end of the title, or to the bracket that closed
+	// around it.
+	tail := title[loc[1]:]
+	if end := strings.IndexAny(tail, ")]"); end >= 0 {
+		tail = tail[:end]
+	}
+
+	var guests []string
+	for _, name := range guestSeparator.Split(tail, -1) {
+		if name = strings.TrimSpace(name); len(name) > 2 {
+			guests = append(guests, name)
+		}
+	}
+	return guests
+}
+
+var guestSeparator = regexp.MustCompile(`\s*(?:&|,|;|\+|\band\b|\bи\b)\s*`)
 
 // wordOverlap is the share of the shorter side's words that also appear on the
 // other, so a name that carries extra words is still recognised by the ones it

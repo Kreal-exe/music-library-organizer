@@ -2,6 +2,7 @@ package lyrics
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -356,4 +357,87 @@ func TestFromURLRefusesWhatItCannotRead(t *testing.T) {
 			t.Errorf("%q was accepted", link)
 		}
 	}
+}
+
+func TestTitleThatRepeatsTheArtist(t *testing.T) {
+	got := attempts(Query{Artist: "Lil Uzi Vert", Title: "Lil Uzi Vert - No Script (Cannon)"})
+	if len(got) == 0 {
+		t.Fatal("no searches at all")
+	}
+	if got[0].Title != "No Script (Cannon)" {
+		t.Errorf("searched for %q, expected the artist to be dropped from the title", got[0].Title)
+	}
+}
+
+// "п.у." is what a Russian release writes for "feat.", and the word boundary
+// in the pattern is an ASCII one, so it has to sit outside it.
+func TestRussianGuestCreditIsDropped(t *testing.T) {
+	cases := map[string]string{
+		"Magic City п.у. @jetvillains": "Magic City",
+		"Bankroll п.у. Sil-A":          "Bankroll",
+		"Ангел и бес":                  "Ангел и бес",
+	}
+	for in, want := range cases {
+		if got := cleanTitle(in); got != want {
+			t.Errorf("cleanTitle(%q) = %q, expected %q", in, got, want)
+		}
+	}
+}
+
+// A database files a collaboration under whoever it considers the lead, which
+// is often the guest our title names.
+func TestACandidateCreditedToTheGuestCounts(t *testing.T) {
+	q := attempts(Query{Artist: "Juice WRLD", Title: "Boomerang (feat. Lil Yachty)"})[0]
+
+	under := Match{Artist: "Lil Yachty", Title: "Boomerang"}
+	if got := score(q, under); got < 0.62 {
+		t.Errorf("a song filed under the named guest scored %.2f", got)
+	}
+
+	stranger := Match{Artist: "Taylor Swift", Title: "Boomerang"}
+	if score(q, stranger) >= score(q, under) {
+		t.Error("an unrelated artist scored as high as the named guest")
+	}
+}
+
+func TestVersionMarkersComeOffTheBareTitle(t *testing.T) {
+	cases := map[string]string{
+		"Insecurities OG":   "Insecurities",
+		"Push Me Away OG":   "Push Me Away",
+		"Silent SHH (Stem)": "Silent SHH",
+		"I Need More v2":    "I Need More",
+		"Ride":              "Ride",
+	}
+	for in, want := range cases {
+		if got := bareTitle(in); got != want {
+			t.Errorf("bareTitle(%q) = %q, expected %q", in, got, want)
+		}
+	}
+}
+
+// What nearly matched is named rather than thrown away, since a collection of
+// leaks is full of tracks the databases hold under another name.
+func TestTheClosestMissIsReported(t *testing.T) {
+	f := &Finder{MinScore: 0.62, rounds: [][]provider{{stubProvider{
+		Match{Artist: "Some Alias", Title: "Ангел и Бес", Lyrics: "a line of a song\nand another line"},
+	}}}}
+
+	_, err := f.Find(context.Background(), Query{Artist: "ЛСП", Title: "Ангел и бес"})
+	var missing *NotFound
+	if !errors.As(err, &missing) {
+		t.Fatalf("the near miss was not reported: %v", err)
+	}
+	if missing.Closest.Title != "Ангел и Бес" {
+		t.Errorf("reported %q", missing.Closest.Title)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Error("the error no longer reads as not found")
+	}
+}
+
+type stubProvider []Match
+
+func (s stubProvider) name() string { return "stub" }
+func (s stubProvider) search(context.Context, Query) ([]Match, error) {
+	return []Match(s), nil
 }

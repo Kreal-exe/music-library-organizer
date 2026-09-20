@@ -149,9 +149,20 @@ than a guess:
   compared by the words they have in common, so a file credited to `ZillaKami
   x SosMula` still matches a database entry filed under `City Morgue`.
 - **The title carries a qualifier no database knows.** `Deprived (Session
-  Edit)` and `Devil Horns (v1)` return nothing anywhere; searched under the
-  plain name they are both found, and another take of the same song is
-  accepted as a match.
+  Edit)`, `Devil Horns (v1)` and `Insecurities OG` return nothing anywhere;
+  searched under the plain name they are all found, and another take of the
+  same song is accepted as a match.
+- **The title repeats the artist**, as a download names its file: `Lil Uzi
+  Vert - No Script` is searched for under `No Script`, since asking for the
+  artist twice finds nothing.
+- **A collaboration is filed under the guest.** `Act Right (feat. GDo)` is
+  GDo's song on Genius, so a candidate credited to a guest the title names
+  counts as credited to somebody who was on the track. Guests are read in
+  either alphabet, including the `п.у.` a Russian release writes.
+
+What nearly matched is named instead of being thrown away silently: a track
+the databases hold under an alias comes back as *not found (closest: …)*, and
+can be finished from the track menu with **Lyrics from a link…**.
 
 A source that answers 429 or 5xx is retried twice before it counts as failed,
 and a source falling over is only reported when no source answered at all —

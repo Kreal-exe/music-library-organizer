@@ -709,6 +709,13 @@ func (a *App) lookup(ctx context.Context, track tags.Track) (LyricsResult, lyric
 		return result, lyrics.Match{}
 	case errors.Is(err, lyrics.ErrNotFound):
 		result.Status = "missing"
+
+		// Whatever came closest is named, so a track the databases file under
+		// another name can be finished by hand from the track menu.
+		var missing *lyrics.NotFound
+		if errors.As(err, &missing) && missing.Closest.Title != "" {
+			result.Detail = fmt.Sprintf("closest: %s — %s", missing.Closest.Artist, missing.Closest.Title)
+		}
 		return result, lyrics.Match{}
 	case err != nil:
 		result.Status, result.Detail = "error", err.Error()
