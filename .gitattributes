@@ -1,0 +1,9 @@
+# One line ending in the repository, whatever the machine writes locally.
+* text=auto eol=lf
+
+# PowerShell is happier with CRLF on the platform it runs on.
+*.ps1 text eol=crlf
+
+*.png binary
+*.ico binary
+internal/device/agent/mlm-agent-arm64 binary

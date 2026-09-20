@@ -1,0 +1,359 @@
+package lyrics
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestCleanTitle(t *testing.T) {
+	cases := map[string]string{
+		"Lucid Dreams":                        "Lucid Dreams",
+		"Lucid Dreams (Official Audio)":       "Lucid Dreams",
+		"03. Lucid Dreams":                    "Lucid Dreams",
+		"Righteous [Prod. Nick Mira]":         "Righteous",
+		"Bad Energy (feat. Future)":           "Bad Energy",
+		"Bad Energy feat. Future":             "Bad Energy",
+		"Wandered To LA (Unreleased) (CDQ)":   "Wandered To LA",
+		"Bohemian Rhapsody - Remastered 2011": "Bohemian Rhapsody",
+		"Come & Go":                           "Come & Go",
+		"Всё идёт по плану":                   "Всё идёт по плану",
+	}
+	for in, want := range cases {
+		if got := cleanTitle(in); got != want {
+			t.Errorf("cleanTitle(%q) = %q, expected %q", in, got, want)
+		}
+	}
+}
+
+func TestLeadArtist(t *testing.T) {
+	cases := map[string]string{
+		"Juice WRLD":                    "Juice WRLD",
+		"Juice WRLD feat. Trippie Redd": "Juice WRLD",
+		"Juice WRLD & Young Thug":       "Juice WRLD",
+		"Eminem, Dr. Dre":               "Eminem",
+	}
+	for in, want := range cases {
+		if got := leadArtist(in); got != want {
+			t.Errorf("leadArtist(%q) = %q, expected %q", in, got, want)
+		}
+	}
+}
+
+func TestScorePrefersTheRightSong(t *testing.T) {
+	q := Query{Artist: "Juice WRLD", Title: "Lucid Dreams", Duration: 4 * time.Minute}
+
+	right := Match{Artist: "Juice WRLD", Title: "Lucid Dreams", Duration: 4 * time.Minute}
+	wrong := Match{Artist: "Taylor Swift", Title: "Lover"}
+	near := Match{Artist: "Juice WRLD", Title: "Lucid Dreams (Remix)"}
+
+	if score(q, right) < 0.9 {
+		t.Errorf("an exact match scored %.2f", score(q, right))
+	}
+	if score(q, wrong) > 0.4 {
+		t.Errorf("an unrelated song scored %.2f", score(q, wrong))
+	}
+	if score(q, near) <= score(q, wrong) {
+		t.Error("a remix must score above an unrelated song")
+	}
+}
+
+func TestTidyLyricsRejectsStubs(t *testing.T) {
+	if got := tidyLyrics("[Instrumental]"); got != "" {
+		t.Errorf("an instrumental was accepted: %q", got)
+	}
+	if got := tidyLyrics("   "); got != "" {
+		t.Errorf("empty lyrics were accepted: %q", got)
+	}
+
+	const real = "First line of a song\nSecond line of a song\n\n\n\nThird line"
+	got := tidyLyrics(real)
+	if strings.Contains(got, "\n\n\n") {
+		t.Error("blank runs were not collapsed")
+	}
+	if !strings.HasPrefix(got, "First line") {
+		t.Errorf("the lyrics were mangled: %q", got)
+	}
+}
+
+func TestExtractGeniusLyrics(t *testing.T) {
+	// The shape of a real page: the container also holds a contributor header
+	// and a recommendations panel, both marked as excluded from selection.
+	const page = `<html><body>
+<div>ignored preamble</div>
+<div data-lyrics-container="true" class="Lyrics__Container">
+<div data-exclude-from-selection="true" class="LyricsHeader"><div>566 Contributors</div>Lucid Dreams Lyrics</div>
+[Verse 1]<br/>I still see your shadows<a href="/x"><span>in my room</span></a><br/>
+<div class="ReferentFragment"><span>Can&#39;t take back the love</span></div><br/>
+<div data-exclude-from-selection="true"><aside>You might also like</aside></div>
+</div>
+<div data-lyrics-container="true"></div>
+<div data-lyrics-container="true">[Chorus]<br/>You left me falling</div>
+<div>footer</div>
+</body></html>`
+
+	got := extractGeniusLyrics(page)
+
+	for _, want := range []string{
+		"[Verse 1]",
+		"I still see your shadows",
+		"in my room",
+		"Can't take back the love",
+		"[Chorus]",
+		"You left me falling",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the lyrics are missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"preamble", "footer", "Contributors", "Lucid Dreams Lyrics", "You might also like"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("extra content was captured (%q):\n%s", unwanted, got)
+		}
+	}
+	if strings.Contains(got, "<") {
+		t.Errorf("markup was not stripped:\n%s", got)
+	}
+}
+
+// TestFindAgainstLiveSources talks to the real services. It is skipped under
+// -short, and treats a network failure as a skip rather than a failure.
+func TestFindAgainstLiveSources(t *testing.T) {
+	if testing.Short() {
+		t.Skip("network test skipped")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	finder := NewFinder()
+
+	cases := []struct {
+		name   string
+		query  Query
+		expect string // A phrase the real lyrics must contain.
+	}{
+		{
+			name:   "released track",
+			query:  Query{Artist: "Juice WRLD", Title: "Lucid Dreams"},
+			expect: "shadows",
+		},
+		{
+			name:   "guest credit in the tag",
+			query:  Query{Artist: "Eminem feat. Rihanna", Title: "Love The Way You Lie"},
+			expect: "lie",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			match, err := finder.Find(ctx, tc.query)
+			if err != nil {
+				t.Skipf("source unavailable: %v", err)
+			}
+
+			t.Logf("source %s, score %.2f: %s / %s", match.Source, match.Score, match.Artist, match.Title)
+			if !strings.Contains(strings.ToLower(match.Lyrics), tc.expect) {
+				t.Errorf("the lyrics are missing %q; starts:\n%.300s", tc.expect, match.Lyrics)
+			}
+		})
+	}
+}
+
+// TestGeniusDirectly exercises the fallback on its own, since LRCLIB answers
+// first for anything released and would otherwise hide a broken Genius.
+func TestGeniusDirectly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("network test skipped")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	g := &genius{client: &http.Client{Timeout: 20 * time.Second}, limiter: newLimiter(700 * time.Millisecond)}
+
+	q := Query{Artist: "Juice WRLD", Title: "Lucid Dreams"}
+	matches, err := g.search(ctx, q)
+	if err != nil {
+		t.Skipf("Genius unavailable: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("Genius returned nothing")
+	}
+
+	best := matches[0]
+	t.Logf("%s — %s (%s)", best.Artist, best.Title, best.URL)
+	t.Logf("lyrics start:\n%.200s", best.Lyrics)
+
+	if !strings.Contains(strings.ToLower(best.Lyrics), "shadows") {
+		t.Errorf("these do not look like real lyrics:\n%.400s", best.Lyrics)
+	}
+	if strings.Contains(best.Lyrics, "<") {
+		t.Error("markup was left in the lyrics")
+	}
+}
+
+func TestBareTitleStripsQualifiers(t *testing.T) {
+	cases := map[string]string{
+		"Deprived (Session Edit)":   "Deprived",
+		"Devil Horns (v1)":          "Devil Horns",
+		"Devil Horns v2":            "Devil Horns",
+		"GANG GREEN [Prod. Thraxx]": "GANG GREEN",
+		"Lucid Dreams":              "Lucid Dreams",
+		"(Intro)":                   "(Intro)",
+		"Всё идёт по плану":         "Всё идёт по плану",
+	}
+	for in, want := range cases {
+		if got := bareTitle(in); got != want {
+			t.Errorf("bareTitle(%q) = %q, expected %q", in, got, want)
+		}
+	}
+}
+
+func TestPlaceholderArtist(t *testing.T) {
+	for _, name := range []string{"VK", "vk.com", "Various Artists", "Unknown Artist", "Сборник"} {
+		if !placeholderArtist(name) {
+			t.Errorf("%q was taken for an artist", name)
+		}
+	}
+	for _, name := range []string{"City Morgue", "Juice WRLD", "Кишлак", "VA Kee"} {
+		if placeholderArtist(name) {
+			t.Errorf("%q was taken for a placeholder", name)
+		}
+	}
+}
+
+func TestAttemptsFallBackToTheAlbumArtist(t *testing.T) {
+	// The file says the artist is VK, which is where it was downloaded from;
+	// the real name is only in the album artist.
+	got := attempts(Query{Artist: "VK", AlbumArtist: "City Morgue", Title: "GANG GREEN [Prod. Thraxx]"})
+	if len(got) != 1 {
+		t.Fatalf("expected one search, got %d: %+v", len(got), got)
+	}
+	if got[0].Artist != "City Morgue" {
+		t.Errorf("searched as %q, expected City Morgue", got[0].Artist)
+	}
+	if got[0].Title != "GANG GREEN" {
+		t.Errorf("searched for %q, expected GANG GREEN", got[0].Title)
+	}
+}
+
+func TestAttemptsRetryWithoutTheQualifier(t *testing.T) {
+	got := attempts(Query{Artist: "Juice WRLD", Title: "Deprived (Session Edit)"})
+	if len(got) != 2 {
+		t.Fatalf("expected two searches, got %d: %+v", len(got), got)
+	}
+	if got[0].Title != "Deprived (Session Edit)" {
+		t.Errorf("first search was for %q", got[0].Title)
+	}
+	if got[1].Title != "Deprived" {
+		t.Errorf("second search was for %q, expected the bare title", got[1].Title)
+	}
+}
+
+func TestAttemptsKeepOneSearchForAnOrdinaryTrack(t *testing.T) {
+	got := attempts(Query{Artist: "Juice WRLD", AlbumArtist: "Juice WRLD", Title: "Lucid Dreams"})
+	if len(got) != 1 {
+		t.Errorf("an ordinary track took %d searches: %+v", len(got), got)
+	}
+}
+
+func TestScoreAcceptsAnotherTakeOfTheSameSong(t *testing.T) {
+	q := Query{Artist: "Juice WRLD", Title: "Deprived (Session Edit)"}
+
+	session := Match{Artist: "Juice WRLD", Title: "Deprived (Studio Session)"}
+	if got := score(q, session); got < 0.8 {
+		t.Errorf("the same song in another take scored %.2f", got)
+	}
+
+	other := Match{Artist: "Juice WRLD", Title: "Wishing Well"}
+	if score(q, other) >= score(q, session) {
+		t.Error("a different song scored as high as another take of the right one")
+	}
+}
+
+func TestWorthRetrying(t *testing.T) {
+	for _, code := range []int{429, 500, 502, 503, 504} {
+		if !worthRetrying(code) {
+			t.Errorf("%d should be retried", code)
+		}
+	}
+	for _, code := range []int{200, 301, 400, 404} {
+		if worthRetrying(code) {
+			t.Errorf("%d should not be retried", code)
+		}
+	}
+}
+
+func TestNameFromFile(t *testing.T) {
+	cases := []struct{ path, artist, title string }{
+		{"/sdcard/Music/VK/ZillaKami x SosMula - Bukkake.mp3", "ZillaKami x SosMula", "Bukkake"},
+		{`D:\Music\04. Juice WRLD — Lucid Dreams.flac`, "Juice WRLD", "Lucid Dreams"},
+		{"/sdcard/Music/Lucid Dreams.mp3", "", "Lucid Dreams"},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		artist, title := nameFromFile(c.path)
+		if artist != c.artist || title != c.title {
+			t.Errorf("nameFromFile(%q) = %q / %q, expected %q / %q", c.path, artist, title, c.artist, c.title)
+		}
+	}
+}
+
+func TestLeadArtistDropsTheUploader(t *testing.T) {
+	cases := map[string]string{
+		"Juice WRLD | @uploads_channel": "Juice WRLD",
+		"@uploads_channel | Juice WRLD": "Juice WRLD",
+		"Кино | t.me/rock":              "Кино",
+		"@uploads_channel":              "@uploads_channel",
+		"City Morgue":                   "City Morgue",
+	}
+	for in, want := range cases {
+		if got := leadArtist(in); got != want {
+			t.Errorf("leadArtist(%q) = %q, expected %q", in, got, want)
+		}
+	}
+}
+
+func TestSharedWordsCountAsAMatch(t *testing.T) {
+	// The file names the two rappers; the database files the song under the
+	// duo they record as, and credits one of them as a guest.
+	q := Query{Artist: "ZillaKami x SosMula", Title: "Bukkake"}
+	candidate := Match{Artist: "City Morgue (Ft. ZillaKami & SosMula)", Title: "Bukkake"}
+
+	if got := score(q, candidate); got < 0.62 {
+		t.Errorf("a credit sharing both names scored %.2f", got)
+	}
+
+	unrelated := Match{Artist: "Taylor Swift", Title: "Bukkake"}
+	if score(q, unrelated) >= score(q, candidate) {
+		t.Error("an unrelated artist scored as high as the one that shares both names")
+	}
+}
+
+func TestAttemptsUseTheFileName(t *testing.T) {
+	got := attempts(Query{
+		Artist: "VK",
+		Title:  "GANG GREEN",
+		Path:   "/sdcard/Music/VK/ZillaKami x SosMula - GANG GREEN.mp3",
+	})
+	if len(got) == 0 {
+		t.Fatal("no searches at all")
+	}
+	// The lead of the pair in the file name, the same reading every other
+	// candidate gets.
+	if got[0].Artist != "ZillaKami" {
+		t.Errorf("searched as %q, expected the name from the file", got[0].Artist)
+	}
+}
+
+func TestFromURLRefusesWhatItCannotRead(t *testing.T) {
+	f := NewFinder()
+	for _, link := range []string{"", "not a link", "ftp://genius.com/x", "https://example.com/song"} {
+		if _, err := f.FromURL(context.Background(), link); err == nil {
+			t.Errorf("%q was accepted", link)
+		}
+	}
+}

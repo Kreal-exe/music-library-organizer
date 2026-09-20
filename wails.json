@@ -1,0 +1,12 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "MusicLibraryOrganizer",
+  "outputfilename": "Music Library Organizer",
+  "info": {
+    "productName": "Music Library Organizer",
+    "productVersion": "1.0.0",
+    "companyName": "Music Library Organizer",
+    "copyright": "",
+    "comments": "Keep a music library's artist list in order"
+  }
+}
