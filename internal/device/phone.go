@@ -8,6 +8,7 @@ package device
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"musiclibraryorganizer/internal/tags"
@@ -332,26 +335,29 @@ func trimCR(line []byte) []byte {
 
 // Rescan asks the phone's media database to re-read the files that changed, so
 // a player shows the new tags without the user clearing its cache.
-func (p *Phone) Rescan(ctx context.Context, root string, paths []string) {
+//
+// It says nothing about playlists: those are put right once, by
+// RescanPlaylists, when the whole job is over. Doing it after every batch of
+// files costs half a minute each time and is undone by the next batch anyway.
+func (p *Phone) Rescan(ctx context.Context, paths []string) {
 	const maxFiles = 2000
 
 	if len(paths) > maxFiles {
 		// Too many to name one by one, so the whole volume is read instead.
 		_, _ = p.run(ctx, "shell",
 			"content call --uri content://media --method scan_volume --arg external_primary")
-	} else {
-		for _, path := range paths {
-			if ctx.Err() != nil {
-				return
-			}
-			p.scanFile(ctx, path)
-		}
+		return
 	}
 
-	p.rescanPlaylists(ctx, root)
+	for _, path := range paths {
+		if ctx.Err() != nil {
+			return
+		}
+		p.scanFile(ctx, path)
+	}
 }
 
-// rescanPlaylists asks the phone to read its playlist files again.
+// RescanPlaylists asks the phone to read its playlist files again.
 //
 // This is not housekeeping. A playlist on Android is a list of database row
 // numbers, not of file names, and rewriting a track's tags gives that track a
@@ -362,7 +368,7 @@ func (p *Phone) Rescan(ctx context.Context, root string, paths []string) {
 // The playlist files on disk are untouched by any of this, so having the
 // scanner read them again puts every entry back. It skips a file whose
 // timestamp it has already seen, which is why each one is touched first.
-func (p *Phone) rescanPlaylists(ctx context.Context, root string) {
+func (p *Phone) RescanPlaylists(ctx context.Context, root string) {
 	if root == "" || ctx.Err() != nil {
 		return
 	}
@@ -373,6 +379,10 @@ func (p *Phone) rescanPlaylists(ctx context.Context, root string) {
 		return
 	}
 
+	// One listing of every playlist the database holds, rather than a lookup
+	// per attempt: each round trip to the phone costs about half a second.
+	known := p.playlistIDs(ctx)
+
 	for _, line := range strings.Split(strings.ReplaceAll(string(out), "\r", ""), "\n") {
 		playlist := strings.TrimSpace(line)
 		if playlist == "" {
@@ -381,11 +391,105 @@ func (p *Phone) rescanPlaylists(ctx context.Context, root string) {
 		if ctx.Err() != nil {
 			return
 		}
+		p.reimport(ctx, playlist, known[playlist])
+	}
+}
+
+// playlistIDs maps each playlist file the database knows to its row number.
+func (p *Phone) playlistIDs(ctx context.Context) map[string]string {
+	out, err := p.run(ctx, "shell",
+		"content query --uri content://media/external/audio/playlists --projection _id:_data")
+	if err != nil {
+		return nil
+	}
+
+	ids := map[string]string{}
+	for _, line := range strings.Split(strings.ReplaceAll(string(out), "\r", ""), "\n") {
+		match := playlistRow.FindStringSubmatch(strings.TrimSpace(line))
+		if match == nil {
+			continue
+		}
+
+		// The database stores the real path; the search above finds the same
+		// file through /sdcard, which is a link to it.
+		path := strings.TrimSpace(match[2])
+		ids[path] = match[1]
+		ids[strings.Replace(path, "/storage/emulated/0", "/sdcard", 1)] = match[1]
+	}
+	return ids
+}
+
+var playlistRow = regexp.MustCompile(`_id=(\d+), _data=(.+?)\s*$`)
+
+// How many times one playlist is offered to the scanner before giving up. A
+// scan can land while the tracks it is looking for are still being written, and
+// then it finds fewer of them than the file lists.
+const reimportTries = 3
+
+// reimport has the scanner read one playlist file, and checks that it worked.
+//
+// The count is compared against the file rather than trusted, because the
+// failure this guards against is silent: the file keeps every line either way,
+// and only the database comes back short. A playlist can legitimately list a
+// track that is no longer on the phone, so the test is not that the counts
+// match — it is that another attempt stops finding more.
+func (p *Phone) reimport(ctx context.Context, playlist, id string) {
+	listed := p.countEntries(ctx, playlist)
+	best := -1
+
+	for range reimportTries {
+		if ctx.Err() != nil {
+			return
+		}
 
 		_, _ = p.run(ctx, "shell", "touch "+shellQuote(playlist))
 		p.scanFile(ctx, playlist)
+
+		if id == "" {
+			return // Not a playlist the database holds; nothing to check.
+		}
+		got := p.countMembers(ctx, id)
+		if got >= listed || got <= best {
+			return
+		}
+		best = got
 	}
 }
+
+// countEntries is how many tracks a playlist file names.
+func (p *Phone) countEntries(ctx context.Context, playlist string) int {
+	out, err := p.run(ctx, "shell", `grep -vc "^#" `+shellQuote(playlist)+" 2>/dev/null")
+	if err != nil {
+		return 0
+	}
+	return number(out)
+}
+
+// countMembers is how many of them the database currently holds.
+func (p *Phone) countMembers(ctx context.Context, id string) int {
+	members, err := p.run(ctx, "shell",
+		"content query --uri content://media/external/audio/playlists/"+id+
+			"/members --projection audio_id")
+	if err != nil {
+		return 0
+	}
+	return bytes.Count(members, []byte("Row:"))
+}
+
+// number reads the first whole number out of a command's output.
+func number(out []byte) int {
+	match := firstNumber.FindSubmatch(out)
+	if match == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(string(match[1]))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+var firstNumber = regexp.MustCompile(`(\d+)`)
 
 // scanFile tells the media database to read one file again.
 func (p *Phone) scanFile(ctx context.Context, path string) {

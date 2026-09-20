@@ -116,6 +116,23 @@ func (a *App) fitWindow() {
 
 func (a *App) shutdown(context.Context) { a.Cancel() }
 
+// finished is the last thing a job that wrote to a phone does.
+//
+// Writing to a track detaches it from every playlist it was in, because a
+// playlist holds database row numbers and the track has just been given a new
+// one. Having the playlist files read again puts the entries back, and it is
+// done here — once, at the end — rather than after each batch, because the
+// next batch would undo it anyway.
+func (a *App) finished(ctx context.Context) {
+	a.mu.Lock()
+	phone := a.phone
+	a.mu.Unlock()
+
+	if phone != nil {
+		phone.RescanPlaylists(ctx, a.root())
+	}
+}
+
 // root is the folder the open library was scanned from.
 func (a *App) root() string {
 	a.mu.Lock()
@@ -458,6 +475,7 @@ func (a *App) Apply() (ApplyReport, error) {
 	if err != nil && !report.Cancelled {
 		return report, err
 	}
+	a.finished(ctx)
 
 	a.mu.Lock()
 	a.changes = nil
@@ -477,13 +495,13 @@ func (a *App) write(ctx context.Context, items []wire.Item, report func(device.P
 			return err
 		}
 		// The phone's media database still holds the old tags until it is told
-		// to look again — and its playlists point at the rows that were just
-		// replaced, so the library's root goes along to have them read again.
+		// to look again. Its playlists are put right by finished(), once the
+		// whole job is over.
 		paths := make([]string, 0, len(items))
 		for _, item := range items {
 			paths = append(paths, item.Path)
 		}
-		phone.Rescan(ctx, a.root(), paths)
+		phone.Rescan(ctx, paths)
 		return nil
 	}
 
@@ -661,6 +679,13 @@ func (a *App) FetchLyrics(opts LyricsOptions) (LyricsReport, error) {
 	mu.Lock()
 	flush()
 	mu.Unlock()
+
+	// The playlists are put right even when the run was stopped half way, since
+	// what was written up to then detached those tracks all the same. A
+	// cancelled context would refuse the commands, so this one is its own.
+	settle, stop := context.WithTimeout(a.ctx, 3*time.Minute)
+	a.finished(settle)
+	stop()
 
 	report.Cancelled = cancelled || ctx.Err() != nil
 	return report, nil

@@ -264,7 +264,8 @@ func TestRescanReadsThePlaylistsAgain(t *testing.T) {
 	}}
 	phone := &Phone{adb: fake, Serial: "SERIAL1"}
 
-	phone.Rescan(context.Background(), "/sdcard/Music", []string{"/sdcard/Music/a.mp3"})
+	phone.Rescan(context.Background(), []string{"/sdcard/Music/a.mp3"})
+	phone.RescanPlaylists(context.Background(), "/sdcard/Music")
 
 	want := []string{
 		"scan_file --arg '/sdcard/Music/a.mp3'",
@@ -297,7 +298,8 @@ func TestRescanFallsBackToTheWholeVolume(t *testing.T) {
 	for i := range paths {
 		paths[i] = "/sdcard/Music/track.mp3"
 	}
-	phone.Rescan(context.Background(), "/sdcard/Music", paths)
+	phone.Rescan(context.Background(), paths)
+	phone.RescanPlaylists(context.Background(), "/sdcard/Music")
 
 	if len(fake.calls) > 10 {
 		t.Errorf("2500 files were scanned one by one: %d calls", len(fake.calls))
@@ -309,4 +311,52 @@ func TestRescanFallsBackToTheWholeVolume(t *testing.T) {
 	if !strings.Contains(joined, "-iname \"*.m3u\"") {
 		t.Error("the playlists were not looked for")
 	}
+}
+
+// The scanner sometimes reads a playlist while the tracks it names are still
+// being written, and then it finds fewer of them than the file lists. The
+// count is checked against the file rather than trusted.
+func TestReimportStopsWhenThePlaylistIsWhole(t *testing.T) {
+	fake := &fakeADB{replies: map[string]string{
+		"find":                             "/sdcard/Music/Favourites.m3u\n",
+		"grep -vc":                         "3\n",
+		"playlists --projection _id:_data": "Row: 0 _id=17162, _data=/sdcard/Music/Favourites.m3u\n",
+		"members":                          "Row: 0 audio_id=1\nRow: 1 audio_id=2\nRow: 2 audio_id=3\n",
+	}}
+	phone := &Phone{adb: fake, Serial: "SERIAL1"}
+
+	phone.RescanPlaylists(context.Background(), "/sdcard/Music")
+
+	if touches := countCalls(fake, "touch"); touches != 1 {
+		t.Errorf("a whole playlist was offered to the scanner %d times", touches)
+	}
+}
+
+// When it keeps coming back short, the retries stop rather than going on for
+// ever: a playlist may name a track that is no longer on the phone.
+func TestReimportGivesUpOnAPlaylistThatStaysShort(t *testing.T) {
+	fake := &fakeADB{replies: map[string]string{
+		"find":                             "/sdcard/Music/Favourites.m3u\n",
+		"grep -vc":                         "5\n",
+		"playlists --projection _id:_data": "Row: 0 _id=17162, _data=/sdcard/Music/Favourites.m3u\n",
+		"members":                          "Row: 0 audio_id=1\n",
+	}}
+	phone := &Phone{adb: fake, Serial: "SERIAL1"}
+
+	phone.RescanPlaylists(context.Background(), "/sdcard/Music")
+
+	touches := countCalls(fake, "touch")
+	if touches < 2 || touches > reimportTries {
+		t.Errorf("a short playlist was offered %d times, expected between 2 and %d", touches, reimportTries)
+	}
+}
+
+func countCalls(fake *fakeADB, phrase string) int {
+	n := 0
+	for _, call := range fake.calls {
+		if strings.Contains(call, phrase) {
+			n++
+		}
+	}
+	return n
 }
