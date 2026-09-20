@@ -85,9 +85,17 @@ func (a ADB) Stream(ctx context.Context, onLine func([]byte) error, args ...stri
 	return nil
 }
 
+// conn is everything a Phone asks of adb: one-shot commands, and one whose
+// output is read as it arrives. Naming it makes the conversation with the
+// phone something a test can stand in for.
+type conn interface {
+	Runner
+	Streamer
+}
+
 // Phone is a connected device with the agent in place.
 type Phone struct {
-	adb    ADB
+	adb    conn
 	Serial string
 }
 
@@ -324,19 +332,63 @@ func trimCR(line []byte) []byte {
 
 // Rescan asks the phone's media database to re-read the files that changed, so
 // a player shows the new tags without the user clearing its cache.
-func (p *Phone) Rescan(ctx context.Context, paths []string) {
-	// Which of these a phone allows varies by Android version, so both are
-	// tried and neither is required to succeed.
-	_, _ = p.run(ctx, "shell",
-		"content call --uri content://media --method scan_volume --arg external_primary")
+func (p *Phone) Rescan(ctx context.Context, root string, paths []string) {
+	const maxFiles = 2000
 
-	const maxBroadcasts = 400
-	for i, path := range paths {
-		if i >= maxBroadcasts || ctx.Err() != nil {
+	if len(paths) > maxFiles {
+		// Too many to name one by one, so the whole volume is read instead.
+		_, _ = p.run(ctx, "shell",
+			"content call --uri content://media --method scan_volume --arg external_primary")
+	} else {
+		for _, path := range paths {
+			if ctx.Err() != nil {
+				return
+			}
+			p.scanFile(ctx, path)
+		}
+	}
+
+	p.rescanPlaylists(ctx, root)
+}
+
+// rescanPlaylists asks the phone to read its playlist files again.
+//
+// This is not housekeeping. A playlist on Android is a list of database row
+// numbers, not of file names, and rewriting a track's tags gives that track a
+// new row — so every playlist that pointed at the old one silently loses the
+// entry. On a real phone that emptied six playlists of about eleven hundred
+// tracks between them.
+//
+// The playlist files on disk are untouched by any of this, so having the
+// scanner read them again puts every entry back. It skips a file whose
+// timestamp it has already seen, which is why each one is touched first.
+func (p *Phone) rescanPlaylists(ctx context.Context, root string) {
+	if root == "" || ctx.Err() != nil {
+		return
+	}
+
+	out, err := p.run(ctx, "shell", "find "+shellQuote(root)+
+		` -maxdepth 4 \( -iname "*.m3u" -o -iname "*.m3u8" -o -iname "*.pls" \) 2>/dev/null`)
+	if err != nil {
+		return
+	}
+
+	for _, line := range strings.Split(strings.ReplaceAll(string(out), "\r", ""), "\n") {
+		playlist := strings.TrimSpace(line)
+		if playlist == "" {
+			continue
+		}
+		if ctx.Err() != nil {
 			return
 		}
-		_, _ = p.run(ctx, "shell",
-			"am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "+
-				shellQuote("file://"+path))
+
+		_, _ = p.run(ctx, "shell", "touch "+shellQuote(playlist))
+		p.scanFile(ctx, playlist)
 	}
+}
+
+// scanFile tells the media database to read one file again.
+func (p *Phone) scanFile(ctx context.Context, path string) {
+	_, _ = p.run(ctx, "shell",
+		"content call --uri content://media/external --method scan_file --arg "+shellQuote(path))
 }

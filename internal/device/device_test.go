@@ -254,3 +254,59 @@ func TestDevicesUsesRunner(t *testing.T) {
 		t.Errorf("the wrong command was issued: %v", fake.calls)
 	}
 }
+
+// Editing tags empties a phone's playlists unless they are read again: a
+// playlist holds database row numbers, and rewriting a track gives it a new
+// row. This is the check that the playlists are not forgotten.
+func TestRescanReadsThePlaylistsAgain(t *testing.T) {
+	fake := &fakeADB{replies: map[string]string{
+		"find": "/sdcard/Music/Favourites.m3u\n/sdcard/Music/Рус.m3u\n",
+	}}
+	phone := &Phone{adb: fake, Serial: "SERIAL1"}
+
+	phone.Rescan(context.Background(), "/sdcard/Music", []string{"/sdcard/Music/a.mp3"})
+
+	want := []string{
+		"scan_file --arg '/sdcard/Music/a.mp3'",
+		"touch '/sdcard/Music/Favourites.m3u'",
+		"scan_file --arg '/sdcard/Music/Favourites.m3u'",
+		"touch '/sdcard/Music/Рус.m3u'",
+		"scan_file --arg '/sdcard/Music/Рус.m3u'",
+	}
+	for _, phrase := range want {
+		found := false
+		for _, call := range fake.calls {
+			if strings.Contains(call, phrase) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("the phone was never asked to %q\ncalls: %v", phrase, fake.calls)
+		}
+	}
+}
+
+// A collection too large to name file by file is read as a whole, and the
+// playlists still follow.
+func TestRescanFallsBackToTheWholeVolume(t *testing.T) {
+	fake := &fakeADB{}
+	phone := &Phone{adb: fake, Serial: "SERIAL1"}
+
+	paths := make([]string, 2500)
+	for i := range paths {
+		paths[i] = "/sdcard/Music/track.mp3"
+	}
+	phone.Rescan(context.Background(), "/sdcard/Music", paths)
+
+	if len(fake.calls) > 10 {
+		t.Errorf("2500 files were scanned one by one: %d calls", len(fake.calls))
+	}
+	joined := strings.Join(fake.calls, "\n")
+	if !strings.Contains(joined, "scan_volume") {
+		t.Error("the volume was never read")
+	}
+	if !strings.Contains(joined, "-iname \"*.m3u\"") {
+		t.Error("the playlists were not looked for")
+	}
+}

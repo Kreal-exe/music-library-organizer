@@ -116,6 +116,17 @@ func (a *App) fitWindow() {
 
 func (a *App) shutdown(context.Context) { a.Cancel() }
 
+// root is the folder the open library was scanned from.
+func (a *App) root() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.lib == nil {
+		return ""
+	}
+	return a.lib.Root
+}
+
 // begin replaces any running job with a fresh cancellable context, so starting
 // a new one always stops the last.
 func (a *App) begin() context.Context {
@@ -466,12 +477,13 @@ func (a *App) write(ctx context.Context, items []wire.Item, report func(device.P
 			return err
 		}
 		// The phone's media database still holds the old tags until it is told
-		// to look again.
+		// to look again — and its playlists point at the rows that were just
+		// replaced, so the library's root goes along to have them read again.
 		paths := make([]string, 0, len(items))
 		for _, item := range items {
 			paths = append(paths, item.Path)
 		}
-		phone.Rescan(ctx, paths)
+		phone.Rescan(ctx, a.root(), paths)
 		return nil
 	}
 

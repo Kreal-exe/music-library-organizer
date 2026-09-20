@@ -107,8 +107,16 @@ What you need:
 3. The confirmation dialog on the phone, the first time.
 
 Then pick **Android phone** instead of a folder, choose the music folder, and
-work as usual. After applying, the tool asks Android to re-index what changed,
-so players see the new tags without a reboot.
+work as usual. After applying, the tool asks Android to re-index the files it
+changed, so players see the new tags without a reboot — and then to read the
+playlists again.
+
+That second step is not housekeeping. A playlist on Android is a list of
+database row numbers, not of file names, so rewriting a track's tags gives it a
+new row and every playlist that pointed at the old one silently loses the
+entry. The playlist files on disk are never touched, so having the scanner read
+them again puts every entry back; without it, a collection comes out of a tag
+edit with its playlists gutted.
 
 Only 64-bit ARM phones are supported, which is every Android phone still
 receiving applications.
