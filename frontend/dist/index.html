@@ -119,10 +119,13 @@
             <b id="albums-to">0</b> albums
           </div>
           <div class="grow"></div>
+          <button id="album-summary-toggle" class="btn small">Details</button>
           <button id="albums-changed" class="btn small" aria-pressed="false">Only merged</button>
           <button id="albums-all" class="btn small">Merge everything</button>
           <button id="albums-none" class="btn small">Keep everything apart</button>
         </div>
+        <div id="album-merge-summary" class="merge-summary" hidden></div>
+        <datalist id="album-names"></datalist>
       </div>
 
       <div id="junk-albums" class="junk" hidden>

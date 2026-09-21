@@ -103,6 +103,12 @@ function applyTheme(theme) {
 
 applyTheme(readTheme());
 
+// On a Mac the window buttons are drawn over the page, and the top bar makes
+// room for them.
+if (/Mac/.test(navigator.platform || navigator.userAgent)) {
+  document.documentElement.classList.add("mac");
+}
+
 $("theme").addEventListener("click", () => {
   applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
 });
@@ -880,6 +886,116 @@ function buildAlbumGroups() {
     b.tracks.length - a.tracks.length || a.name.localeCompare(b.name) || a.artist.localeCompare(b.artist));
 }
 
+/* The whole album reduction on one screen --------------------------------- */
+
+$("album-summary-toggle").addEventListener("click", () => {
+  const panel = $("album-merge-summary");
+  panel.hidden = !panel.hidden;
+  $("album-summary-toggle").textContent = panel.hidden ? "Details" : "Hide";
+  if (!panel.hidden) renderAlbumMergeSummary();
+});
+
+// renderAlbumMergeSummary lists every album name that changes and the album it
+// becomes, so the whole reduction can be checked and corrected in one place.
+// As with artists, a row stays under its heading when unticked rather than
+// vanishing, and the heading is where the album is renamed.
+function renderAlbumMergeSummary() {
+  const panel = $("album-merge-summary");
+  if (panel.hidden) return;
+  panel.replaceChildren();
+
+  const byTarget = new Map();
+  for (const group of albumGroups) {
+    for (const source of group.sources) {
+      if (source.value === source.proposed) continue;
+      const id = albumId(source.owner, source.proposed);
+      if (!byTarget.has(id)) {
+        byTarget.set(id, { owner: source.owner, name: source.proposed, artist: group.artist, sources: [] });
+      }
+      byTarget.get(id).sources.push(source);
+    }
+  }
+
+  if (!byTarget.size) {
+    panel.append(el("div", "row-sub", "No album is being merged."));
+    return;
+  }
+
+  const blocks = [...byTarget.values()].sort((a, b) =>
+    b.sources.length - a.sources.length || a.name.localeCompare(b.name));
+  for (const block of blocks) panel.append(albumSummaryGroup(block));
+}
+
+function albumSummaryGroup({ owner, name, artist, sources }) {
+  const block = el("div", "summary-group");
+  const head = el("div", "summary-head");
+
+  const field = el("input", "summary-target");
+  field.type = "text";
+  field.value = name;
+  field.spellcheck = false;
+  field.setAttribute("list", "album-names");
+  field.title = "Type another name to rename the album";
+
+  // Change and blur both fire when the field is left, and the first redraws.
+  let committed = false;
+  const commit = () => {
+    const wanted = field.value.trim();
+    if (committed || !wanted || wanted === name) {
+      field.value = name;
+      return;
+    }
+    committed = true;
+    renameAlbumTo(owner, name, wanted);
+  };
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") field.blur();
+    if (event.key === "Escape") { field.value = name; field.blur(); }
+  });
+  field.addEventListener("change", commit);
+  field.addEventListener("blur", commit);
+
+  const ticked = sources.filter((s) => !state.albumDetached.has(albumId(s.owner, s.value))).length;
+  head.append(field, el("span", "count", `${artist} · ${ticked} of ${plural(sources.length, "name")}`));
+  block.append(head);
+
+  for (const source of sources) {
+    const id = albumId(source.owner, source.value);
+    const row = el("label", "summary-row");
+    if (state.albumDetached.has(id)) row.classList.add("off");
+
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = !state.albumDetached.has(id);
+    box.addEventListener("change", () => {
+      if (box.checked) state.albumDetached.delete(id);
+      else state.albumDetached.add(id);
+      renderAlbums();
+      refreshPending();
+    });
+
+    row.append(box, el("span", "from", source.value), el("span", "arrow", "→"), el("span", "to", name));
+    if (albumKinds[source.kind]) row.append(el("span", "badge", albumKinds[source.kind]));
+    row.append(el("span", "count", tracks(source.tracks)));
+    block.append(row);
+  }
+  return block;
+}
+
+// renameAlbumTo points every album of one artist now headed for a name at
+// another name; typing a name the artist already has merges the two.
+function renameAlbumTo(owner, from, wanted) {
+  for (const album of state.summary.albums) {
+    if (album.owner !== owner) continue;
+    const id = albumId(album.owner, album.name);
+    if ((state.albumRenamed.get(id) || album.name) !== from) continue;
+    if (wanted === album.name) state.albumRenamed.delete(id);
+    else state.albumRenamed.set(id, wanted);
+  }
+  renderAlbums();
+  refreshPending();
+}
+
 // clearedPaths lists the tracks whose album field goes.
 function clearedPaths() {
   const out = [];
@@ -935,6 +1051,13 @@ function renderAlbums() {
 
   albumGroups = buildAlbumGroups();
   renderJunkAlbums();
+  renderAlbumMergeSummary();
+  const names = $("album-names");
+  names.replaceChildren(...[...new Set(albumGroups.map((g) => g.name))].map((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    return option;
+  }));
   $("albums-from").textContent = state.summary.rawAlbums;
   $("albums-to").textContent = albumGroups.length;
   $("count-albums").textContent = albumGroups.length || "";
