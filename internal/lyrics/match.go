@@ -63,13 +63,75 @@ var (
 // "Devil Horns (v1)" — and a database that has the song files it under the
 // plain name, so searching for the decorated one finds nothing at all.
 func bareTitle(title string) string {
+	// The spaces are closed up before the version marker is looked for at the
+	// end: a bracket taken off leaves them there, and "Everlasting Love V2
+	// (Session Edit)" kept its "V2" and found nothing.
 	bare := bracketedAside.ReplaceAllString(cleanTitle(title), " ")
+	bare = strings.Join(strings.Fields(bare), " ")
 	bare = versionSuffix.ReplaceAllString(bare, "")
 	bare = strings.TrimSpace(strings.Join(strings.Fields(bare), " "))
 	if bare == "" {
 		return cleanTitle(title) // The whole title was inside brackets.
 	}
 	return bare
+}
+
+// Words in a title's brackets that only describe the file, not which
+// recording it is: an edit, a version number, where it leaked from.
+var fileQualifiers = map[string]bool{
+	"edit": true, "edited": true, "version": true, "ver": true, "cdq": true, "hq": true,
+	"lq": true, "snippet": true, "leak": true, "leaked": true, "unreleased": true,
+	"master": true, "mastered": true, "full": true, "clean": true, "explicit": true,
+	"dirty": true, "audio": true, "official": true, "lyric": true, "lyrics": true,
+	"video": true, "stem": true, "stems": true, "the": true, "and": true,
+}
+
+var versionWord = regexp.MustCompile(`^v\d+$`)
+
+// qualifiers are the words in a title's brackets that name the recording:
+// "session" in "Everlasting Love V2 (Session Edit)", "live" and "acoustic"
+// elsewhere. A guest credit or a producer is not one, and neither is anything
+// in fileQualifiers.
+func qualifiers(title string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, aside := range bracketedAside.FindAllString(cleanTitle(title), -1) {
+		for _, word := range words(aside) {
+			word = qualifierStem(word)
+			if fileQualifiers[word] || versionWord.MatchString(word) || seen[word] {
+				continue
+			}
+			seen[word] = true
+			out = append(out, word)
+		}
+	}
+	return out
+}
+
+// qualifierStem folds "sessions" and "session" together.
+func qualifierStem(word string) string {
+	if len([]rune(word)) > 4 {
+		return strings.TrimSuffix(word, "s")
+	}
+	return word
+}
+
+// hasQualifiers says whether a candidate's title names the recording the
+// query's qualifiers describe. A query without any is matched by anything.
+func hasQualifiers(want []string, title string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	have := map[string]bool{}
+	for _, word := range words(title) {
+		have[qualifierStem(word)] = true
+	}
+	for _, word := range want {
+		if !have[word] {
+			return false
+		}
+	}
+	return true
 }
 
 // Names that are not artists. A downloader writes where the file came from
@@ -169,6 +231,16 @@ func score(q Query, candidate Match) float64 {
 	}
 
 	total := 0.6*title + 0.4*artist
+
+	// The right song in the wrong recording is a weaker match than the right
+	// recording, whichever name happens to be spelled closer.
+	if len(q.Qualifiers) > 0 {
+		if hasQualifiers(q.Qualifiers, candidate.Title) {
+			total += 0.04
+		} else {
+			total -= 0.08
+		}
+	}
 
 	// Two songs with the same name by the same artist are told apart by how
 	// long they run.

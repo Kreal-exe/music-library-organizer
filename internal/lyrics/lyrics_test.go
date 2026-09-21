@@ -243,14 +243,18 @@ func TestAttemptsFallBackToTheAlbumArtist(t *testing.T) {
 
 func TestAttemptsRetryWithoutTheQualifier(t *testing.T) {
 	got := attempts(Query{Artist: "Juice WRLD", Title: "Deprived (Session Edit)"})
-	if len(got) != 2 {
-		t.Fatalf("expected two searches, got %d: %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("expected three searches, got %d: %+v", len(got), got)
 	}
 	if got[0].Title != "Deprived (Session Edit)" {
 		t.Errorf("first search was for %q", got[0].Title)
 	}
-	if got[1].Title != "Deprived" {
-		t.Errorf("second search was for %q, expected the bare title", got[1].Title)
+	// The recording's own word goes in before the bare title.
+	if got[1].Title != "Deprived session" {
+		t.Errorf("second search was for %q, expected the title and its qualifier", got[1].Title)
+	}
+	if got[2].Title != "Deprived" {
+		t.Errorf("third search was for %q, expected the bare title", got[2].Title)
 	}
 }
 
@@ -440,4 +444,60 @@ type stubProvider []Match
 func (s stubProvider) name() string { return "stub" }
 func (s stubProvider) search(context.Context, Query) ([]Match, error) {
 	return []Match(s), nil
+}
+
+// A session edit is searched for as a session first, and the session's page
+// wins over the released song's even though the released name is closer.
+func TestSessionEditFindsTheSession(t *testing.T) {
+	q := Query{Artist: "Juice WRLD", Title: "Everlasting Love V2 (Session Edit)"}
+
+	if got := bareTitle(q.Title); got != "Everlasting Love" {
+		t.Errorf("bareTitle = %q", got)
+	}
+
+	var titles []string
+	for _, attempt := range attempts(q) {
+		titles = append(titles, attempt.Title)
+	}
+	want := []string{"Everlasting Love V2 (Session Edit)", "Everlasting Love session", "Everlasting Love"}
+	if strings.Join(titles, "|") != strings.Join(want, "|") {
+		t.Errorf("attempts = %q, expected %q", titles, want)
+	}
+
+	attempt := attempts(q)[2]
+	released := score(attempt, Match{Artist: "Juice WRLD", Title: "Everlasting Love"})
+	session := score(attempt, Match{Artist: "Juice WRLD", Title: "Everlasting Love (Sessions)"})
+	if session <= released {
+		t.Errorf("the session scored %.2f, the released song %.2f", session, released)
+	}
+}
+
+// The right song in the wrong recording is only taken when the recording is
+// nowhere to be found.
+func TestReleasedSongIsOnlyAFallback(t *testing.T) {
+	f := &Finder{MinScore: 0.62, rounds: [][]provider{{
+		&titleStub{byTitle: map[string][]Match{
+			"Everlasting Love V2 (Session Edit)": {{Artist: "Juice WRLD", Title: "Everlasting Love", Lyrics: strings.Repeat("released words ", 5)}},
+			"Everlasting Love session":           {{Artist: "Juice WRLD", Title: "Everlasting Love (Sessions)", Lyrics: strings.Repeat("session words ", 5)}},
+		}},
+	}}}
+
+	got, err := f.Find(context.Background(), Query{Artist: "Juice WRLD", Title: "Everlasting Love V2 (Session Edit)"})
+	if err != nil || got.Title != "Everlasting Love (Sessions)" {
+		t.Errorf("found %q, %v", got.Title, err)
+	}
+
+	f.rounds[0][0].(*titleStub).byTitle["Everlasting Love session"] = nil
+	got, err = f.Find(context.Background(), Query{Artist: "Juice WRLD", Title: "Everlasting Love V2 (Session Edit)"})
+	if err != nil || got.Title != "Everlasting Love" {
+		t.Errorf("with no session anywhere, found %q, %v", got.Title, err)
+	}
+}
+
+type titleStub struct{ byTitle map[string][]Match }
+
+func (s *titleStub) name() string { return "stub" }
+
+func (s *titleStub) search(_ context.Context, q Query) ([]Match, error) {
+	return s.byTitle[q.Title], nil
 }

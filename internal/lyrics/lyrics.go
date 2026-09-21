@@ -58,6 +58,12 @@ type Query struct {
 	// They are kept because a database files a collaboration under whoever it
 	// considers the lead, which is often one of them.
 	Guests []string
+
+	// Qualifiers are the words in the title's brackets that say which
+	// recording this is — "session" in "Everlasting Love V2 (Session Edit)".
+	// A search drops them to find the song at all, so they are kept here to
+	// tell that recording's lyrics from the released song's.
+	Qualifiers []string
 }
 
 // Match is one candidate set of lyrics.
@@ -137,6 +143,10 @@ func (f *Finder) Find(ctx context.Context, q Query) (Match, error) {
 	var firstErr error
 	answered := 0
 	closest := Match{}
+	// A match that is the right song but not the recording the title names —
+	// the released "Everlasting Love" for a session edit of it — is kept in
+	// case nothing better turns up, and the search goes on for the recording.
+	fallback := Match{}
 
 	for _, round := range f.rounds {
 		for _, attempt := range searches {
@@ -166,12 +176,20 @@ func (f *Finder) Find(ctx context.Context, q Query) (Match, error) {
 				}
 				if best.Score >= f.MinScore {
 					best.Lyrics = tidyLyrics(best.Lyrics)
-					if best.Lyrics != "" {
+					switch {
+					case best.Lyrics == "":
+					case hasQualifiers(attempt.Qualifiers, best.Title):
 						return best, nil
+					case best.Score > fallback.Score:
+						fallback = best
 					}
 				}
 			}
 		}
+	}
+
+	if fallback.Lyrics != "" {
+		return fallback, nil
 	}
 
 	// A source that fell over is only worth reporting if no source answered at
@@ -227,8 +245,17 @@ func attempts(q Query) []Query {
 	// for with that taken off.
 	named := withoutLeadingArtist(strings.TrimSpace(q.Title), append(artists, q.Artist, fileArtist))
 
+	// The recording's own words go into a search of their own, before the
+	// bare name: a database that has the session files it as "Everlasting
+	// Love (Sessions)", which the bare name ranks below the released song.
+	q.Qualifiers = qualifiers(named)
+
 	titles := []string{cleanTitle(named)}
-	if bare := bareTitle(named); !strings.EqualFold(bare, titles[0]) {
+	bare := bareTitle(named)
+	if len(q.Qualifiers) > 0 {
+		titles = append(titles, bare+" "+strings.Join(q.Qualifiers, " "))
+	}
+	if !strings.EqualFold(bare, titles[0]) {
 		titles = append(titles, bare)
 	}
 	if fileTitle = cleanTitle(withoutLeadingArtist(fileTitle, artists)); fileTitle != "" {
@@ -255,6 +282,7 @@ func attempts(q Query) []Query {
 
 		attempt := q
 		attempt.Artist, attempt.Title, attempt.Guests = artist, title, guests
+		attempt.Qualifiers = q.Qualifiers
 		out = append(out, attempt)
 	}
 
