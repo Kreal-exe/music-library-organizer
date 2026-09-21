@@ -1,0 +1,137 @@
+name: Release
+
+# Pushing a tag such as v1.0.4 builds the application for every platform and
+# publishes it. The release text is the tag's own message, so it is written
+# once, with `git tag -a`, next to the code it describes.
+#
+# Running it by hand against an existing tag rebuilds that tag and replaces the
+# downloads on its release, which is how a platform that failed is filled in.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build, such as v1.0.4
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  WAILS: github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      # The version is shown in the application and in the file names, so a
+      # tag that disagrees with wails.json would ship a build that lies.
+      - id: read
+        run: |
+          version=$(jq -r .info.productVersion wails.json)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::$TAG does not match productVersion $version in wails.json"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go install "$WAILS"
+
+      # The agent is embedded into the application, so it is built first.
+      - name: Build the phone agent
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
+            -ldflags="-s -w" -o internal/device/agent/mlm-agent-arm64 ./cmd/agent
+
+      - name: Build the application
+        run: |
+          wails build -platform windows/amd64
+          mv "build/bin/Music Library Organizer.exe" \
+            "build/bin/MusicLibraryOrganizer-${{ needs.version.outputs.version }}-windows-amd64.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/bin/*.exe
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go install "$WAILS"
+
+      # The same target a Mac builds with locally: the agent, then one
+      # application for Apple Silicon and Intel, signed and zipped.
+      - name: Build the application
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          make mac-zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/bin/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [version, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A release is created from the tag's message the first time; after
+      # that its text is left alone and only the downloads are replaced.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            git tag -l --format='%(contents:body)' "$TAG" > notes.md
+            gh release create "$TAG" dist/* --verify-tag \
+              --title "Music Library Organizer ${{ needs.version.outputs.version }}" \
+              --notes-file notes.md
+          fi

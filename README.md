@@ -283,6 +283,17 @@ newer.
 
 For development, `wails dev`.
 
+**Releases** build themselves. Set `productVersion` in `wails.json`, commit,
+and push an annotated tag whose message is the release text:
+
+```
+git tag -a v1.0.4 -F notes.md && git push origin v1.0.4
+```
+
+GitHub Actions then builds the Windows `.exe` and the universal macOS zip and
+publishes both on the release. A tag that disagrees with `wails.json` stops
+the run before anything is built.
+
 Keep the checkout out of iCloud Drive. It syncs `.git` too, and after a commit
 it leaves empty copies of git's object folders — `10`, `2f`, `d0` and so on —
 in the root of the project.
