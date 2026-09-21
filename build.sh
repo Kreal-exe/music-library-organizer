@@ -1,15 +1,11 @@
 #!/bin/sh
-# Builds the macOS application, agent first — the Mac counterpart of build.ps1.
-#
-# The agent is the half that runs on the phone and it is embedded into the
-# application, so building it second would ship the previous one.
+# Builds the macOS application.
 #
 #   ./build.sh        build/bin/MusicLibraryOrganizer.app
 #   ./build.sh zip    the same, plus the zip for a release
 set -e
 cd "$(dirname "$0")"
 
-# go install puts wails here, and a fresh shell often has no such entry.
 PATH="$(go env GOPATH)/bin:$PATH"
 export PATH
 

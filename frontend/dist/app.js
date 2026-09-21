@@ -1054,7 +1054,9 @@ function renderJunkAlbums() {
   list.replaceChildren();
 
   for (const item of junk) {
-    const row = el("label", "variant");
+    // A plain row rather than a label: a click on the name or the counts must
+    // open the list, not tick the name for removal.
+    const row = el("div", "variant");
     const box = el("input");
     box.type = "checkbox";
     box.checked = state.albumCleared.has(item.value);
@@ -1068,17 +1070,19 @@ function renderJunkAlbums() {
     // The name opens the list of tracks that carry it, so it is plain what a
     // tick would touch before anything is ticked.
     const open = junkExpanded.has(item.value);
-    const name = el("button", "link", item.value);
-    name.addEventListener("click", (event) => {
-      event.preventDefault();
+    const toggle = () => {
       if (junkExpanded.has(item.value)) junkExpanded.delete(item.value);
       else junkExpanded.add(item.value);
       renderJunkAlbums();
-    });
+    };
+    const name = el("button", "link", item.value);
+    name.addEventListener("click", toggle);
+    const counts = el("button", "link count", `${tracks(item.tracks)} · ${plural(item.artists, "artist")}`);
+    counts.setAttribute("aria-expanded", String(open));
+    counts.addEventListener("click", toggle);
 
     row.append(box, name);
-    row.append(el("span", "badge", item.reason === "site" ? "site name" : `on ${item.artists} artists`));
-    row.append(el("span", "count", `${tracks(item.tracks)} · ${plural(item.artists, "artist")} · ${open ? "hide" : "show"}`));
+    row.append(el("span", "badge", item.reason === "site" ? "site name" : `on ${item.artists} artists`), counts);
     list.append(row);
 
     if (open) {
@@ -1947,8 +1951,10 @@ const refreshPending = debounce(async () => {
   try {
     const preview = await go().Preview(rules());
     const count = preview.summary.files;
+    lastPreview = preview;
+    if (!$("pending-bubble").hidden) fillBubble();
 
-    $("pending").textContent = count ? `${files(count)} will change` : "No changes yet";
+    $("pending").textContent = count ? `${files(count)} will change: ${pendingParts(preview.summary)}` : "No changes yet";
     $("pending").classList.toggle("ready", count > 0);
     $("apply").disabled = count === 0;
     $("preview").disabled = count === 0;
@@ -1956,6 +1962,117 @@ const refreshPending = debounce(async () => {
     toast(String(err), true);
   }
 }, 120);
+
+/* What the count is made of, on hover -------------------------------------- */
+
+// Hovering the count in the footer opens a bubble with the changes that make
+// it up: each change once — "Album artist: — → Juice WRLD" — with how many
+// songs it touches and on which albums. A change opens to its songs, and a
+// song to its file. The bubble stays open while the pointer is over it, so the
+// list can be scrolled and clicked through.
+let lastPreview = null;
+let bubbleTimer = null;
+const bubbleOpen = new Set(); // changes and songs opened, by key
+
+function fillBubble() {
+  const bubble = $("pending-bubble");
+  const preview = lastPreview;
+  const scroll = bubble.querySelector(".bubble-list")?.scrollTop || 0;
+  bubble.replaceChildren();
+  if (!preview || !preview.summary.files) return;
+
+  const total = preview.summary.files;
+  bubble.append(el("div", "bubble-head", `${files(total)} will change`),
+    el("div", "bubble-sub", pendingParts(preview.summary)));
+
+  // One entry per distinct change, holding the files it is made on.
+  const byPath = new Map(state.tracks.map((t) => [t.path, t]));
+  const changes = new Map();
+  for (const change of preview.changes || []) {
+    for (const field of change.fields || []) {
+      const key = `${field.name}\u0000${field.before}\u0000${field.after}`;
+      if (!changes.has(key)) changes.set(key, { key, field, paths: [] });
+      changes.get(key).paths.push(change.path);
+    }
+  }
+
+  const list = el("div", "bubble-list");
+  const entries = [...changes.values()].sort((a, b) => b.paths.length - a.paths.length);
+  for (const entry of entries) {
+    const songs = entry.paths.map((path) => byPath.get(path) || { path, title: baseName(path), album: "" });
+    const albums = [...new Set(songs.map((s) => s.album).filter(Boolean))];
+    const open = bubbleOpen.has(entry.key);
+
+    const head = el("button", "bubble-change");
+    head.append(
+      el("span", "bubble-caret", open ? "▾" : "▸"),
+      el("span", "bubble-what", `${entry.field.name}: ${entry.field.before || "—"} → ${entry.field.after || "—"}`),
+      el("span", "bubble-sub", `${tracks(songs.length)}${albums.length
+        ? ` · ${albums.slice(0, 2).join(", ")}${albums.length > 2 ? ` +${albums.length - 2}` : ""}` : ""}`),
+    );
+    head.addEventListener("click", () => toggleBubble(entry.key));
+    list.append(head);
+
+    if (!open) continue;
+    for (const song of songs.sort((a, b) => String(a.title).localeCompare(String(b.title)))) {
+      const songKey = `${entry.key}\u0000${song.path}`;
+      const row = el("button", "bubble-song");
+      row.append(el("span", "bubble-title", song.title || baseName(song.path)),
+        el("span", "bubble-sub", [song.artist, song.album].filter(Boolean).join(" · ")));
+      row.addEventListener("click", () => toggleBubble(songKey));
+      list.append(row);
+      if (bubbleOpen.has(songKey)) list.append(el("div", "bubble-path", song.path));
+    }
+  }
+  bubble.append(list);
+  list.scrollTop = scroll;
+  if (preview.shown < total) {
+    bubble.append(el("div", "bubble-sub", `From the first ${preview.shown} of ${files(total)} — Show changes lists every one`));
+  }
+}
+
+function toggleBubble(key) {
+  if (bubbleOpen.has(key)) bubbleOpen.delete(key);
+  else bubbleOpen.add(key);
+  fillBubble();
+}
+
+function showBubble() {
+  clearTimeout(bubbleTimer);
+  if (!lastPreview || !lastPreview.summary.files || state.busy) return;
+  const bubble = $("pending-bubble");
+  if (bubble.hidden) {
+    fillBubble();
+    bubble.hidden = false;
+  }
+  const anchor = $("pending").getBoundingClientRect();
+  bubble.style.left = `${Math.max(12, anchor.left)}px`;
+  bubble.style.bottom = `${window.innerHeight - anchor.top + 12}px`;
+}
+
+function hideBubbleSoon() {
+  clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => { $("pending-bubble").hidden = true; }, 300);
+}
+
+$("pending").addEventListener("mouseenter", showBubble);
+$("pending").addEventListener("mouseleave", hideBubbleSoon);
+$("pending-bubble").addEventListener("mouseenter", () => clearTimeout(bubbleTimer));
+$("pending-bubble").addEventListener("mouseleave", hideBubbleSoon);
+
+// pendingParts says what the changes are, so a number in the footer that
+// nobody asked for can be traced to the suggestion behind it.
+function pendingParts(s) {
+  const parts = [
+    [s.artistRenamed, "artist renamed"],
+    [s.albumRenamed, "album changed"],
+    [s.albumArtistSet, "album artist set"],
+    [s.albumArtistCleared, "album artist removed"],
+    [s.compilationRemoved, "compilation flag off"],
+    [s.genreSet, "genre set"],
+  ].filter(([n]) => n > 0).map(([n, what]) => `${what} on ${n}`);
+  return parts.length ? parts.join(", ") : "other tags";
+}
 
 /* Preview and apply -------------------------------------------------------- */
 
@@ -1997,6 +2114,7 @@ async function showPreview() {
 
 async function runApply() {
   state.busy = true;
+  $("pending-bubble").hidden = true;
   $("apply").disabled = true;
   $("preview").disabled = true;
   $("pending").textContent = "Applying…";

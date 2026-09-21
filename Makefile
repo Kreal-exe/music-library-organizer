@@ -12,19 +12,10 @@ MAC_ZIP := build/bin/MusicLibraryOrganizer-$(VERSION)-macos-universal.zip
 build: agent
 	wails build
 
-# One application for Apple Silicon and Intel alike.
-#
-# In a folder synced by iCloud Drive, as ~/Documents often is, the bundle gets
-# tagged with Finder information that codesign refuses, so Wails' own signing
-# step fails there. Its failure is let through and the bundle signed here; a
-# build that really failed leaves no application and still stops the run.
-# iCloud tags the bundle again straight away, so the check here is the one
-# that matters for running it, not the strict one a download has to pass.
+# One application for Apple Silicon and Intel alike, signed ad hoc.
 mac: agent
 	rm -rf "$(MAC_APP)"
 	-wails build -platform darwin/universal
-	@# iCloud can tag the bundle again between clearing and signing, so the
-	@# pair is tried a few times before giving up.
 	@for try in 1 2 3 4 5; do \
 		xattr -cr "$(MAC_APP)" && codesign --force --deep --sign - "$(MAC_APP)" 2>/dev/null && break; \
 		[ $$try = 5 ] && { echo "codesign kept failing"; exit 1; }; sleep 1; \
@@ -32,9 +23,8 @@ mac: agent
 	codesign --verify --deep "$(MAC_APP)"
 	@echo "Built $(MAC_APP)"
 
-# The download for a release. It is signed and zipped in a temporary folder
-# outside iCloud, where the bundle stays as signed, and passes the strict check
-# before it is zipped.
+# The download for a release: signed and checked in a temporary folder, then
+# zipped.
 mac-zip: mac
 	@stage=$$(mktemp -d) && app="$$stage/$(notdir $(MAC_APP))" && \
 	ditto --norsrc --noextattr "$(MAC_APP)" "$$app" && \
