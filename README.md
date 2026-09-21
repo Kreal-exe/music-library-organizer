@@ -267,9 +267,12 @@ result, `build/bin/Music Library Organizer.exe`, needs nothing else.
 `~/go/bin` on the `PATH`, where `go install` puts `wails`:
 
 ```
-make mac            # build/bin/MusicLibraryOrganizer.app, Apple Silicon and Intel
-make mac-zip        # the same, signed and zipped for a release
+./build.sh          # build/bin/MusicLibraryOrganizer.app, Apple Silicon and Intel
+./build.sh zip      # the same, signed and zipped for a release
 ```
+
+`build.sh` installs the Wails CLI if it is missing and runs `make mac` or
+`make mac-zip`, which work just as well on their own.
 
 `make mac` signs the bundle itself, because in a folder iCloud Drive syncs
 Wails' own signing step fails on the Finder information iCloud attaches;

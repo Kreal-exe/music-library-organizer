@@ -23,8 +23,12 @@ build: agent
 mac: agent
 	rm -rf "$(MAC_APP)"
 	-wails build -platform darwin/universal
-	xattr -cr "$(MAC_APP)"
-	codesign --force --deep --sign - "$(MAC_APP)"
+	@# iCloud can tag the bundle again between clearing and signing, so the
+	@# pair is tried a few times before giving up.
+	@for try in 1 2 3 4 5; do \
+		xattr -cr "$(MAC_APP)" && codesign --force --deep --sign - "$(MAC_APP)" 2>/dev/null && break; \
+		[ $$try = 5 ] && { echo "codesign kept failing"; exit 1; }; sleep 1; \
+	done
 	codesign --verify --deep "$(MAC_APP)"
 	@echo "Built $(MAC_APP)"
 
