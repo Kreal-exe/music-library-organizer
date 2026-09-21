@@ -264,9 +264,19 @@ wails build
 result, `build/bin/Music Library Organizer.exe`, needs nothing else.
 
 **macOS** needs the Xcode command line tools (`xcode-select --install`) and
-produces `build/bin/Music Library Organizer.app`; `wails build -platform
-darwin/universal` covers both architectures. A `.app` can only be built on a
-Mac — Apple does not allow cross-compiling to its own platform.
+`~/go/bin` on the `PATH`, where `go install` puts `wails`:
+
+```
+make mac            # build/bin/MusicLibraryOrganizer.app, Apple Silicon and Intel
+make mac-zip        # the same, signed and zipped for a release
+```
+
+`make mac` signs the bundle itself, because in a folder iCloud Drive syncs
+Wails' own signing step fails on the Finder information iCloud attaches;
+`make mac-zip` signs its copy outside iCloud, so the download passes a strict
+check. A `.app` can only be built on a Mac — Apple does not allow
+cross-compiling to its own platform. The Go toolchain builds for macOS 13 or
+newer.
 
 For development, `wails dev`.
 

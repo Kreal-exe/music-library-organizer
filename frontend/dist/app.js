@@ -27,6 +27,8 @@ const state = {
   // albumId; and albums pointed at another name, by the id of the album.
   albumDetached: new Set(),
   albumRenamed: new Map(),
+  // Album names to remove from their tracks altogether.
+  albumCleared: new Set(),
 
   albumArtistMode: "keep",
   removeCompilation: false,
@@ -310,7 +312,7 @@ window.runtime.EventsOn("scan:progress", (p) => {
 
 async function applyScan(result) {
   const summary = result.summary;
-  for (const field of ["targets", "albumArtists", "albums"]) summary[field] = summary[field] || [];
+  for (const field of ["targets", "albumArtists", "albums", "junkAlbums"]) summary[field] = summary[field] || [];
 
   state.summary = summary;
   state.onPhone = result.source === "phone";
@@ -319,6 +321,9 @@ async function applyScan(result) {
   state.moved.clear();
   state.albumDetached.clear();
   state.albumRenamed.clear();
+  // A site's name is nobody's album, so it goes unless the user keeps it; a
+  // name merely shared by several artists is only a guess and stays.
+  state.albumCleared = new Set(summary.junkAlbums.filter((j) => j.reason === "site").map((j) => j.value));
   expanded.clear();
   albumExpanded.clear();
   selection.clear();
@@ -370,6 +375,7 @@ function rules() {
   return {
     rename: renames(),
     albumRename: albumRenames(),
+    clearAlbum: clearedPaths(),
     albumArtistMode: state.albumArtistMode,
     removeCompilation: state.removeCompilation,
     removeSort: state.removeSort,
@@ -837,6 +843,7 @@ $("albums-none").addEventListener("click", () => {
 // albums of one artist renamed alike shown as one.
 function buildAlbumGroups() {
   const byPath = new Map(state.tracks.map((t) => [t.path, t]));
+  const cleared = new Set(clearedPaths());
   const found = new Map();
 
   const ensure = (owner, name, artist) => {
@@ -859,13 +866,54 @@ function buildAlbumGroups() {
       group.sources.push({ ...source, owner: album.owner, proposed: name });
       for (const path of source.paths || []) {
         const track = byPath.get(path);
-        if (track) group.tracks.push(track);
+        if (track && !cleared.has(path)) group.tracks.push(track);
       }
     }
   }
 
+  // An album whose name is being removed from every track is gone.
+  for (const [id, group] of found) {
+    if (!group.tracks.length) found.delete(id);
+  }
+
   return [...found.values()].sort((a, b) =>
     b.tracks.length - a.tracks.length || a.name.localeCompare(b.name) || a.artist.localeCompare(b.artist));
+}
+
+// clearedPaths lists the tracks whose album field goes.
+function clearedPaths() {
+  const out = [];
+  for (const junk of state.summary.junkAlbums) {
+    if (state.albumCleared.has(junk.value)) out.push(...(junk.paths || []));
+  }
+  return out;
+}
+
+// renderJunkAlbums offers the album names that are no album — the site a
+// download came from, most often — for removal.
+function renderJunkAlbums() {
+  const junk = state.summary.junkAlbums;
+  $("junk-albums").hidden = junk.length === 0;
+  const list = $("junk-list");
+  list.replaceChildren();
+
+  for (const item of junk) {
+    const row = el("label", "variant");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = state.albumCleared.has(item.value);
+    box.addEventListener("change", () => {
+      if (box.checked) state.albumCleared.add(item.value);
+      else state.albumCleared.delete(item.value);
+      renderAlbums();
+      refreshPending();
+    });
+
+    row.append(box, el("span", null, item.value));
+    row.append(el("span", "badge", item.reason === "site" ? "site name" : `on ${item.artists} artists`));
+    row.append(el("span", "count", `${tracks(item.tracks)} · ${plural(item.artists, "artist")}`));
+    list.append(row);
+  }
 }
 
 // albumRenames is what the plan needs: the new album name of every track
@@ -886,6 +934,7 @@ function renderAlbums() {
   if (!state.summary) return;
 
   albumGroups = buildAlbumGroups();
+  renderJunkAlbums();
   $("albums-from").textContent = state.summary.rawAlbums;
   $("albums-to").textContent = albumGroups.length;
   $("count-albums").textContent = albumGroups.length || "";

@@ -386,3 +386,91 @@ func isEdition(qualifier string) bool {
 	}
 	return seen
 }
+
+/* Names that are not albums ------------------------------------------------ */
+
+// Why an album name is taken for no album at all.
+const (
+	// JunkSite is the name of wherever the file was downloaded from, or a
+	// player's placeholder for a missing album: nobody's record is called that.
+	JunkSite = "site"
+	// JunkShared is a name carried by the albums of several artists at once,
+	// with nothing saying it is a compilation. Usually a site's name too, but
+	// only a guess, so it is offered rather than assumed.
+	JunkShared = "shared"
+)
+
+// JunkAlbum is an album name better removed than kept.
+type JunkAlbum struct {
+	Value   string   `json:"value"`
+	Reason  string   `json:"reason"`
+	Tracks  int      `json:"tracks"`
+	Artists int      `json:"artists"`
+	Paths   []string `json:"paths"`
+}
+
+// How many artists have to share an album name before it looks like a site's.
+const junkSharedArtists = 3
+
+// junkNames are album names seen on downloads, folded the way spellingKey
+// folds them.
+var junkNames = map[string]bool{
+	"vk": true, "vkcom": true, "vkontakte": true, "вк": true, "вконтакте": true,
+	"telegram": true, "телеграм": true, "телеграмм": true, "tg": true,
+	"youtube": true, "youtubemusic": true, "soundcloud": true,
+	"zaycevnet": true, "zaycev": true, "muzofond": true, "hitmo": true,
+	"unknown": true, "unknownalbum": true, "noalbum": true, "untitledalbum": true,
+	"неизвестныйальбом": true, "безальбома": true, "неизвестно": true,
+}
+
+// isJunkName says whether a name is a site's or a placeholder in itself.
+func isJunkName(value string) bool {
+	value = strings.Trim(strings.TrimSpace(value), "<>[]()")
+	return watermark.MatchString(value) || junkNames[spellingKey(value)]
+}
+
+// junkAlbums lists the album names that name no album.
+func junkAlbums(tracks []tags.Track) []JunkAlbum {
+	type entry struct {
+		junk        JunkAlbum
+		owners      map[string]bool
+		compilation bool
+	}
+	found := map[string]*entry{}
+	var order []string
+
+	for _, track := range tracks {
+		value := strings.TrimSpace(track.Album)
+		if value == "" {
+			continue
+		}
+		e := found[value]
+		if e == nil {
+			e = &entry{junk: JunkAlbum{Value: value}, owners: map[string]bool{}}
+			found[value] = e
+			order = append(order, value)
+		}
+		e.junk.Tracks++
+		e.junk.Paths = append(e.junk.Paths, track.Path)
+		e.owners[AlbumOwner(track)] = true
+		e.compilation = e.compilation || track.Compilation
+	}
+
+	out := []JunkAlbum{}
+	for _, value := range order {
+		e := found[value]
+		switch {
+		case isJunkName(value):
+			e.junk.Reason = JunkSite
+		case len(e.owners) >= junkSharedArtists && !e.compilation:
+			e.junk.Reason = JunkShared
+		default:
+			continue
+		}
+		e.junk.Artists = len(e.owners)
+		out = append(out, e.junk)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Tracks > out[j].Tracks })
+	return out
+}

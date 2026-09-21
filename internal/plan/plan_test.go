@@ -248,3 +248,17 @@ func TestRenamesAlbums(t *testing.T) {
 		t.Errorf("AlbumRenamed = %d", got)
 	}
 }
+
+func TestClearsAlbum(t *testing.T) {
+	changes := Build(lib(
+		tags.Track{Path: "a.mp3", Artist: "X", Album: "VK"},
+		tags.Track{Path: "b.mp3", Artist: "Y", Album: "VK"},
+	), Rules{ClearAlbum: []string{"a.mp3"}}, noManual())
+
+	if len(changes) != 1 || changes[0].Path != "a.mp3" {
+		t.Fatalf("expected one change for a.mp3: %+v", changes)
+	}
+	if got := changes[0].edit.Album; got == nil || *got != "" {
+		t.Errorf("Album = %v, expected it cleared", got)
+	}
+}

@@ -67,6 +67,9 @@ type Summary struct {
 	// albums a player would show today.
 	Albums    []Album `json:"albums"`
 	RawAlbums int     `json:"rawAlbums"`
+	// JunkAlbums are album names that name no album, such as the site a
+	// download came from.
+	JunkAlbums []JunkAlbum `json:"junkAlbums"`
 
 	TrackCount       int `json:"trackCount"`
 	AlbumArtistCount int `json:"albumArtistCount"`
@@ -127,6 +130,7 @@ func (l *Library) Summarize() Summary {
 	summary.Targets = reduce(raw, artists)
 	summary.AlbumArtists = albumArtists.names()
 	summary.Albums, summary.RawAlbums = summarizeAlbums(l.Tracks)
+	summary.JunkAlbums = junkAlbums(l.Tracks)
 
 	return summary
 }

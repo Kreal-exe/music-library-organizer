@@ -1001,3 +1001,5 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
 
 .btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .variant .badge { padding: 1px 7px; font-size: 10.5px; }
+.junk { margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.junk .group-variants { margin-left: 0; }

@@ -148,3 +148,36 @@ func TestStrayCompilationFlagJoinsAlbum(t *testing.T) {
 		t.Fatalf("expected one album of 3 tracks by Juice WRLD: %+v", albums)
 	}
 }
+
+func TestJunkAlbums(t *testing.T) {
+	junk := junkAlbums([]tags.Track{
+		{Path: "1", Artist: "Velial Squad", Album: "VK"},
+		{Path: "2", Artist: "City Morgue", Album: "VK"},
+		{Path: "3", Artist: "A", Album: "Hits"},
+		{Path: "4", Artist: "B", Album: "Hits"},
+		{Path: "5", Artist: "C", Album: "Hits"},
+		{Path: "6", Artist: "A", Album: "Now 50", Compilation: true},
+		{Path: "7", Artist: "B", Album: "Now 50", Compilation: true},
+		{Path: "8", Artist: "C", Album: "Now 50", Compilation: true},
+		{Path: "9", Artist: "D", Album: "<unknown>"},
+		{Path: "10", Artist: "D", Album: "@leaks_channel"},
+		{Path: "11", Artist: "D", Album: "Real Album"},
+	})
+
+	got := map[string]JunkAlbum{}
+	for _, j := range junk {
+		got[j.Value] = j
+	}
+	want := map[string]string{"VK": JunkSite, "Hits": JunkShared, "<unknown>": JunkSite, "@leaks_channel": JunkSite}
+	if len(got) != len(want) {
+		t.Errorf("found %+v", junk)
+	}
+	for value, reason := range want {
+		if got[value].Reason != reason {
+			t.Errorf("%q: reason %q, expected %q", value, got[value].Reason, reason)
+		}
+	}
+	if vk := got["VK"]; vk.Tracks != 2 || vk.Artists != 2 || len(vk.Paths) != 2 {
+		t.Errorf("VK = %+v", vk)
+	}
+}

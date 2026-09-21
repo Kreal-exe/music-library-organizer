@@ -39,6 +39,9 @@ type Rules struct {
 	// already worked out which tracks make up each album, so it says exactly
 	// which tracks it means.
 	AlbumRename map[string]string `json:"albumRename"`
+	// ClearAlbum lists the tracks whose album field goes, by path: the ones
+	// carrying a name that is no album, such as the site they came from.
+	ClearAlbum []string `json:"clearAlbum"`
 
 	AlbumArtistMode   string `json:"albumArtistMode"`
 	RemoveCompilation bool   `json:"removeCompilation"`
@@ -80,9 +83,14 @@ type Summary struct {
 // Build works out the edit for every track the choices touch. Manual carries
 // the edits made to individual tracks, keyed by path.
 func Build(lib *library.Library, rules Rules, manual map[string]tags.Edit) []Change {
+	clear := make(map[string]bool, len(rules.ClearAlbum))
+	for _, path := range rules.ClearAlbum {
+		clear[path] = true
+	}
+
 	changes := []Change{}
 	for _, track := range lib.Tracks {
-		if change, ok := buildOne(track, rules, manual[track.Path]); ok {
+		if change, ok := buildOne(track, rules, clear[track.Path], manual[track.Path]); ok {
 			changes = append(changes, change)
 		}
 	}
@@ -103,7 +111,7 @@ type wanted struct {
 	discNo      int
 }
 
-func buildOne(track tags.Track, rules Rules, manual tags.Edit) (Change, bool) {
+func buildOne(track tags.Track, rules Rules, clearAlbum bool, manual tags.Edit) (Change, bool) {
 	want := wanted{
 		artist:      rename(track.Artist, rules),
 		albumArtist: rename(track.AlbumArtist, rules),
@@ -122,6 +130,9 @@ func buildOne(track tags.Track, rules Rules, manual tags.Edit) (Change, bool) {
 			want.discNo = disc
 		}
 		want.album = renamed
+	}
+	if clearAlbum {
+		want.album = ""
 	}
 
 	switch rules.AlbumArtistMode {
