@@ -146,11 +146,11 @@
       </div>
 
       <div class="bar"><div id="lyrics-bar"></div></div>
-      <div class="stats-row">
-        <span>Found: <b id="lyrics-found">0</b></span>
-        <span>Not found: <b id="lyrics-missing-count">0</b></span>
-        <span class="err">Errors: <b id="lyrics-failed">0</b></span>
-        <span>With timings: <b id="lyrics-synced-count">0</b></span>
+      <div class="stats-row" id="lyrics-filters">
+        <button class="filter" data-filter="found">Found: <b id="lyrics-found">0</b></button>
+        <button class="filter" data-filter="missing">Not found: <b id="lyrics-missing-count">0</b></button>
+        <button class="filter err" data-filter="error">Errors: <b id="lyrics-failed">0</b></button>
+        <button class="filter" data-filter="synced">With timings: <b id="lyrics-synced-count">0</b></button>
       </div>
       <div id="lyrics-log" class="log"></div>
     </article>
@@ -238,7 +238,7 @@
     <div class="modal-body">
       <div class="row">
         <input id="link-url" class="search wide" type="url" spellcheck="false"
-               placeholder="https://genius.com/…-lyrics" />
+               placeholder="Song page on Genius, AZLyrics, Musixmatch…" />
         <button id="link-fetch" class="btn">Fetch</button>
       </div>
       <div id="link-status" class="muted"></div>

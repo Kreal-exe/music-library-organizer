@@ -70,8 +70,9 @@ type Match struct {
 	Score  float64 `json:"score"`
 
 	// Synced is the same words with a timestamp on every line, when the
-	// source has them. Phone players show these first, and scroll them with
-	// the song; they are saved beside the track rather than in the tag.
+	// source has them, as LRC lines. Phone players show these first, and
+	// scroll them with the song; when asked for, they go into the ordinary
+	// lyrics tag in place of the plain words.
 	Synced string `json:"-"`
 
 	// Duration is the candidate track length, when the source reports one.
@@ -86,8 +87,8 @@ type provider interface {
 
 // Finder looks up lyrics across the configured sources.
 type Finder struct {
-	// pages reads the lyrics off one page, for a link the user found.
-	pages *genius
+	// links reads the lyrics off one page, for a link the user found.
+	links *pageReader
 
 	// rounds are the sources in the order they are asked. Everything in one
 	// round is tried for every reading of the track's name before the next
@@ -107,7 +108,7 @@ func NewFinder() *Finder {
 	pages := &genius{client: client, limiter: newLimiter(700 * time.Millisecond)}
 
 	return &Finder{
-		pages: pages,
+		links: &pageReader{client: client, limiter: newLimiter(700 * time.Millisecond)},
 		rounds: [][]provider{
 			{
 				&lrclib{client: client, limiter: newLimiter(250 * time.Millisecond)},
@@ -385,17 +386,14 @@ func (f *Finder) FromURL(ctx context.Context, link string) (Match, error) {
 	if err != nil || (address.Scheme != "http" && address.Scheme != "https") || address.Host == "" {
 		return Match{}, errors.New("that is not a web address")
 	}
-	if host := strings.TrimPrefix(strings.ToLower(address.Host), "www."); host != "genius.com" {
-		return Match{}, fmt.Errorf("%s is not understood — paste a genius.com song page", address.Host)
-	}
 
-	text, err := f.pages.fetchLyrics(ctx, address.String())
+	source, text, err := f.links.read(ctx, address)
 	if err != nil {
 		return Match{}, err
 	}
 	if text = tidyLyrics(text); text == "" {
-		return Match{}, errors.New("that page has no lyrics on it")
+		return Match{}, errNoWords
 	}
 
-	return Match{Source: "Genius", URL: address.String(), Lyrics: text, Score: 1}, nil
+	return Match{Source: source, URL: address.String(), Lyrics: text, Score: 1}, nil
 }

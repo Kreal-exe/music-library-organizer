@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"musiclibraryorganizer/internal/tags"
 	"musiclibraryorganizer/internal/wire"
@@ -379,6 +380,13 @@ func (p *Phone) RescanPlaylists(ctx context.Context, root string) {
 		return
 	}
 
+	// The writes have only just gone in, and reading a playlist replaces its
+	// contents with whatever resolves at that moment — so a moment is given to
+	// the indexing before any of that is read.
+	if !pause(ctx, reimportPause) {
+		return
+	}
+
 	// One listing of every playlist the database holds, rather than a lookup
 	// per attempt: each round trip to the phone costs about half a second.
 	known := p.playlistIDs(ctx)
@@ -421,10 +429,18 @@ func (p *Phone) playlistIDs(ctx context.Context) map[string]string {
 
 var playlistRow = regexp.MustCompile(`_id=(\d+), _data=(.+?)\s*$`)
 
-// How many times one playlist is offered to the scanner before giving up. A
-// scan can land while the tracks it is looking for are still being written, and
-// then it finds fewer of them than the file lists.
-const reimportTries = 3
+// How many times one playlist is offered to the scanner before giving up, and
+// how long to wait before trying again.
+//
+// A scan can land while the tracks it is looking for are still being indexed,
+// and then it finds fewer of them than the file lists — and, because reading a
+// playlist replaces its contents with whatever resolved, such a scan takes
+// entries away rather than putting them back. The pause is what lets the
+// writes settle first.
+const (
+	reimportTries = 3
+	reimportPause = 2 * time.Second
+)
 
 // reimport has the scanner read one playlist file, and checks that it worked.
 //
@@ -437,7 +453,10 @@ func (p *Phone) reimport(ctx context.Context, playlist, id string) {
 	listed := p.countEntries(ctx, playlist)
 	best := -1
 
-	for range reimportTries {
+	for attempt := range reimportTries {
+		if attempt > 0 && !pause(ctx, reimportPause) {
+			return
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -453,6 +472,20 @@ func (p *Phone) reimport(ctx context.Context, playlist, id string) {
 			return
 		}
 		best = got
+	}
+}
+
+// pause waits, and reports whether the wait finished rather than the job
+// being called off.
+func pause(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

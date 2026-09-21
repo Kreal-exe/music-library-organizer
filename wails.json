@@ -4,9 +4,9 @@
   "outputfilename": "Music Library Organizer",
   "info": {
     "productName": "Music Library Organizer",
-    "productVersion": "1.0.0",
+    "productVersion": "1.0.3",
     "companyName": "Music Library Organizer",
-    "copyright": "",
-    "comments": "Keep a music library's artist list in order"
+    "copyright": "Copyright (c) 2026 Kreal",
+    "comments": "Tidy a music collection's artists, tags and lyrics, on a computer or an Android phone"
   }
 }

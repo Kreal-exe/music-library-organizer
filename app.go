@@ -133,6 +133,13 @@ func (a *App) finished(ctx context.Context) {
 	}
 }
 
+// onPhone says whether the open collection lives on a phone.
+func (a *App) onPhone() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.phone != nil
+}
+
 // root is the folder the open library was scanned from.
 func (a *App) root() string {
 	a.mu.Lock()
@@ -549,8 +556,10 @@ type LyricsResult struct {
 	Artist string `json:"artist"`
 	Title  string `json:"title"`
 	Source string `json:"source"`
-	Status string `json:"status"` // "found" | "missing" | "error"
+	Status string `json:"status"` // "found" | "missing" | "error" | "unwritten"
 	Detail string `json:"detail,omitempty"`
+	// Synced says the words that went in carry timings.
+	Synced bool `json:"synced,omitempty"`
 }
 
 // LyricsReport totals a lyrics run.
@@ -590,8 +599,13 @@ func (a *App) FetchLyrics(opts LyricsOptions) (LyricsReport, error) {
 		mu      sync.Mutex
 		done    int
 		pending []wire.Item
+		synced  = map[string]bool{}
 		wg      sync.WaitGroup
 		queue   = make(chan tags.Track)
+		// writing keeps batches going to the phone one at a time. Each batch
+		// travels as the same plan file, so two at once overwrite each other
+		// and one of them is lost.
+		writing sync.Mutex
 	)
 
 	emit := throttle(func(n int) {
@@ -608,13 +622,25 @@ func (a *App) FetchLyrics(opts LyricsOptions) (LyricsReport, error) {
 		}
 
 		mu.Unlock()
+		writing.Lock()
 		err := a.write(ctx, batch, nil, func(written device.Written) {
-			if written.Error != "" {
-				wr.EventsEmit(a.ctx, "lyrics:track", LyricsResult{
-					Path: written.Path, Status: "error", Detail: written.Error,
-				})
+			if written.Error == "" {
+				return
 			}
+			// The track was reported found when its lookup finished; now it
+			// is taken back out of the totals.
+			mu.Lock()
+			report.Found--
+			report.Failed++
+			if synced[written.Path] {
+				report.Synced--
+			}
+			mu.Unlock()
+			wr.EventsEmit(a.ctx, "lyrics:track", LyricsResult{
+				Path: written.Path, Status: "unwritten", Detail: written.Error,
+			})
 		})
+		writing.Unlock()
 		mu.Lock()
 
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -639,6 +665,8 @@ func (a *App) FetchLyrics(opts LyricsOptions) (LyricsReport, error) {
 					if opts.PreferSynced && found.Synced != "" {
 						text = found.Synced
 						report.Synced++
+						synced[track.Path] = true
+						result.Synced = true
 					}
 					pending = append(pending, wire.Item{
 						Path: track.Path,
@@ -676,9 +704,16 @@ func (a *App) FetchLyrics(opts LyricsOptions) (LyricsReport, error) {
 	wg.Wait()
 
 	// Whatever the last batch found still has to be written, cancelled or not.
+	// This and the playlists below take a while on a phone, with every track
+	// already counted, so the interface is told what is going on.
+	wr.EventsEmit(a.ctx, "lyrics:phase", "Writing the last tracks…")
 	mu.Lock()
 	flush()
 	mu.Unlock()
+
+	if a.onPhone() {
+		wr.EventsEmit(a.ctx, "lyrics:phase", "Putting the playlists back on the phone…")
+	}
 
 	// The playlists are put right even when the run was stopped half way, since
 	// what was written up to then detached those tracks all the same. A

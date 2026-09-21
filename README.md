@@ -45,7 +45,9 @@ click for the file itself: show it in the file manager, copy its path, select
 everything by the same artist, select the rest of the album.
 
 **Lyrics.** Finds lyrics for the tracks that have none and writes them into the
-files as plain text — `USLT` in MP3, `LYRICS` in FLAC, `©lyr` in MP4.
+files — `USLT` in MP3, `LYRICS` in FLAC, `©lyr` in MP4 — timed line by line
+where a source has the timings, so a phone player scrolls them with the song.
+A track no search can place is finished by pasting its page from a lyrics site.
 
 **Cleanup.** The tags that invent artists: set the album artist from the artist
 or remove it entirely, clear the compilation flag, clear the album artist sort
@@ -106,6 +108,13 @@ What you need:
    is the whole download.
 3. The confirmation dialog on the phone, the first time.
 
+If the dialog never appears, the computer is not seeing adb on the phone at
+all — `adb devices` lists nothing, not even *unauthorized*. USB debugging has
+been switched off (phones do it themselves after an update), or the phone is
+connected for charging only. On Honor and Huawei also turn on *Allow ADB
+debugging in charge only mode*; if it still does not ask, *Revoke USB
+debugging authorisations*, switch debugging off and on, and plug in again.
+
 Then pick **Android phone** instead of a folder, choose the music folder, and
 work as usual. After applying, the tool asks Android to re-index the files it
 changed, so players see the new tags without a reboot — and then to read the
@@ -116,7 +125,12 @@ database row numbers, not of file names, so rewriting a track's tags gives it a
 new row and every playlist that pointed at the old one silently loses the
 entry. The playlist files on disk are never touched, so having the scanner read
 them again puts every entry back; without it, a collection comes out of a tag
-edit with its playlists gutted.
+edit with its playlists gutted. The phone is given a moment to finish indexing
+first, since a playlist read while its tracks are still being indexed comes
+back short, and each one is checked against its file and read again if it
+did.
+
+This takes about a minute at the end of a job, and the status line says so.
 
 Only 64-bit ARM phones are supported, which is every Android phone still
 receiving applications.
@@ -161,17 +175,35 @@ than a guess:
   either alphabet, including the `п.у.` a Russian release writes.
 
 What nearly matched is named instead of being thrown away silently: a track
-the databases hold under an alias comes back as *not found (closest: …)*, and
-can be finished from the track menu with **Lyrics from a link…**.
+the databases hold under an alias comes back as *not found (closest: …)*.
 
 A source that answers 429 or 5xx is retried twice before it counts as failed,
 and a source falling over is only reported when no source answered at all —
 otherwise the track was searched for properly and simply is not there.
 
+The counters under the progress bar — found, not found, errors, with timings
+— are filters: click one to see only the tracks it counts, and again to see
+them all. A track that was found but could not be written moves from *found*
+to *errors*, with the reason.
+
+### Lyrics from a link
+
 Some tracks no search can reach: a Russian act catalogued under a
-transliteration of its name, a leak credited to whoever leaked it. Right click
-the track and choose **Lyrics from a link…** to paste the song's page instead;
-what came back is shown before anything is staged.
+transliteration of its name, a leak credited to whoever leaked it. Every line
+the search could not fill has a field for the song's page, and the same is in
+the track menu as **Lyrics from a link…**. What came back is shown before
+anything is staged, and it is written with the next **Apply**.
+
+| Site | How it is read |
+|---|---|
+| [Genius](https://genius.com) | its lyrics containers, without the contributor header and adverts |
+| [AZLyrics](https://www.azlyrics.com) | from the notice that opens the song, so the title above is left out |
+| [Amalgama](https://www.amalgama-lab.com) | the original only, without the translation beside it |
+| [Musixmatch](https://www.musixmatch.com), [Letras](https://www.letras.mus.br), [SongLyrics](https://www.songlyrics.com) and any other site | the words the page declares for search engines, or its longest run of lines, whichever is fuller |
+
+Any text encoding is read, so an old Russian site in windows-1251 comes out
+right. Lyrics.com cannot be read: its page is filled in by a script, and holds
+no words until a browser runs it.
 
 Where a source has the words timed line by line, those are what goes into the
 tag. Phonograph decides what to show with
@@ -207,6 +239,10 @@ or, without make:
 .\build.ps1
 ```
 
+Windows refuses to run scripts until told otherwise. Either allow your own once
+with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or run it with
+`powershell -ExecutionPolicy Bypass -File .\build.ps1`.
+
 Both do the same two things, and the order matters — the agent is embedded into
 the application, so it is built first:
 
@@ -226,6 +262,10 @@ darwin/universal` covers both architectures. A `.app` can only be built on a
 Mac — Apple does not allow cross-compiling to its own platform.
 
 For development, `wails dev`.
+
+Keep the checkout out of iCloud Drive. It syncs `.git` too, and after a commit
+it leaves empty copies of git's object folders — `10`, `2f`, `d0` and so on —
+in the root of the project.
 
 The icon is generated rather than drawn:
 `go run ./tools/icon build` rewrites `build/appicon.png` and

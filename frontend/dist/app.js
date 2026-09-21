@@ -1219,7 +1219,7 @@ function openLinkLyrics(track) {
 
   $("link-title").textContent = `Lyrics for ${track.title || baseName(track.path)}`;
   $("link-url").value = "";
-  $("link-status").textContent = "Paste the song's page on Genius.";
+  $("link-status").textContent = "Paste the song's page from a lyrics site.";
   $("link-preview").hidden = true;
   $("link-preview").textContent = "";
   $("link-confirm").disabled = true;
@@ -1352,17 +1352,39 @@ window.runtime.EventsOn("apply:progress", (p) => {
 
 /* Lyrics ------------------------------------------------------------------- */
 
-const lyricsCounts = { found: 0, missing: 0, failed: 0 };
+// Every track the run reported, in order, with the log line drawn for it. The
+// line is kept rather than redrawn, so a link typed into it survives switching
+// what the log shows.
+const lyricsRows = [];
+const lyricsByPath = new Map();
+// Which counter the log is narrowed to; empty shows everything.
+let lyricsFilter = "";
+
+const lyricsMatches = {
+  found: (row) => row.status === "found",
+  missing: (row) => row.status === "missing",
+  error: (row) => row.status === "error" || row.status === "unwritten",
+  synced: (row) => row.status === "found" && row.synced,
+};
+
+const showsRow = (row) => !lyricsFilter || lyricsMatches[lyricsFilter](row);
 
 $("lyrics-start").addEventListener("click", runLyrics);
 $("lyrics-cancel").addEventListener("click", () => go().Cancel());
 
-async function runLyrics() {
-  lyricsCounts.found = lyricsCounts.missing = lyricsCounts.failed = 0;
-  paintLyricsCounts();
-  $("lyrics-synced-count").textContent = "0";
+$("lyrics-filters").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-filter]");
+  if (!button) return;
+  lyricsFilter = lyricsFilter === button.dataset.filter ? "" : button.dataset.filter;
+  paintLyricsLog();
+});
 
-  $("lyrics-log").replaceChildren();
+async function runLyrics() {
+  lyricsRows.length = 0;
+  lyricsByPath.clear();
+  lyricsFilter = "";
+  paintLyricsLog();
+
   $("lyrics-bar").style.width = "0";
   $("lyrics-start").disabled = true;
   $("lyrics-cancel").disabled = false;
@@ -1375,12 +1397,10 @@ async function runLyrics() {
       preferSynced: $("lyrics-synced").checked,
       artists: [],
     });
-    $("lyrics-synced-count").textContent = report.synced || 0;
 
     $("lyrics-status").textContent = report.cancelled
       ? `Stopped — found ${report.found} of ${report.total}`
       : `Done — found ${report.found} of ${report.total}`;
-    logLyrics($("lyrics-status").textContent, "note");
   } catch (err) {
     $("lyrics-status").textContent = "Error";
     toast(String(err), true);
@@ -1391,16 +1411,109 @@ async function runLyrics() {
 }
 
 function paintLyricsCounts() {
-  $("lyrics-found").textContent = lyricsCounts.found;
-  $("lyrics-missing-count").textContent = lyricsCounts.missing;
-  $("lyrics-failed").textContent = lyricsCounts.failed;
+  const count = (kind) => lyricsRows.filter(lyricsMatches[kind]).length;
+  $("lyrics-found").textContent = count("found");
+  $("lyrics-missing-count").textContent = count("missing");
+  $("lyrics-failed").textContent = count("error");
+  $("lyrics-synced-count").textContent = count("synced");
 }
 
-function logLyrics(text, kind) {
-  const log = $("lyrics-log");
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-  log.append(el("div", kind, text));
-  if (atBottom) log.scrollTop = log.scrollHeight;
+function paintLyricsLog() {
+  for (const button of $("lyrics-filters").querySelectorAll("button")) {
+    button.classList.toggle("active", button.dataset.filter === lyricsFilter);
+  }
+  $("lyrics-log").replaceChildren(...lyricsRows.filter(showsRow).map((row) => row.node));
+  paintLyricsCounts();
+}
+
+// drawLyricsRow fills a row's line for what is now known about the track.
+function drawLyricsRow(row) {
+  const label = `${row.artist} — ${row.title}`;
+  const node = row.node;
+  node.replaceChildren();
+
+  switch (row.status) {
+    case "found":
+      node.className = "found";
+      node.textContent = `✓ ${label}  [${row.source}]${row.synced ? "  · timed" : ""}`;
+      return;
+    case "unwritten":
+      node.className = "error";
+      node.textContent = `✗ ${label} — found, but not written: ${row.detail}`;
+      return;
+    case "missing":
+      node.className = "missing";
+      node.append(el("div", "", `· ${label} — not found${row.detail ? ` (${row.detail})` : ""}`));
+      break;
+    default:
+      node.className = "error";
+      node.append(el("div", "", `✗ ${label} — ${row.detail}`));
+  }
+  node.append(linkControls(row));
+}
+
+// linkControls is the place on a line the search could not fill where the
+// song's page can be pasted instead. What comes back is shown, and only
+// staged — like any other edit, it is written from the footer.
+function linkControls(row) {
+  const box = el("div", "link-box");
+  const line = el("div", "link-row");
+  const input = el("input", "search");
+  input.type = "url";
+  input.spellcheck = false;
+  input.placeholder = "Song page on Genius, AZLyrics, Musixmatch…";
+  const fetchButton = el("button", "btn small", "Fetch");
+  const status = el("span", "muted");
+  const use = el("button", "btn small primary", "Use these lyrics");
+  use.hidden = true;
+  const preview = el("div", "lyrics-preview compact");
+  preview.hidden = true;
+  line.append(input, fetchButton, status, use);
+  box.append(line, preview);
+
+  let text = "";
+
+  const fetchPage = async () => {
+    const link = input.value.trim();
+    if (!link) return;
+    fetchButton.disabled = true;
+    use.hidden = true;
+    status.textContent = "Reading the page…";
+    try {
+      const found = await go().LyricsFromLink(link);
+      text = found.lyrics;
+      status.textContent = `${found.source}: ${plural(text.split("\n").length, "line")}`;
+      preview.textContent = text;
+      preview.hidden = false;
+      use.hidden = false;
+    } catch (err) {
+      text = "";
+      status.textContent = String(err);
+      preview.hidden = true;
+    } finally {
+      fetchButton.disabled = false;
+    }
+  };
+
+  fetchButton.addEventListener("click", fetchPage);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") fetchPage();
+  });
+  use.addEventListener("click", async () => {
+    if (!text) return;
+    try {
+      await go().EditTracks([row.path], { lyrics: text });
+      input.disabled = fetchButton.disabled = true;
+      use.hidden = true;
+      preview.hidden = true;
+      status.textContent = "Staged — written when you apply";
+      refreshPending();
+    } catch (err) {
+      toast(String(err), true);
+    }
+  });
+
+  return box;
 }
 
 window.runtime.EventsOn("lyrics:progress", (p) => {
@@ -1408,18 +1521,33 @@ window.runtime.EventsOn("lyrics:progress", (p) => {
   $("lyrics-status").textContent = `Processed ${p.done} of ${p.total}`;
 });
 
-window.runtime.EventsOn("lyrics:track", (result) => {
-  const label = `${result.artist} — ${result.title}`;
+// What the run is doing once every track has been looked up; on a phone that
+// takes long enough to look like a hang otherwise.
+window.runtime.EventsOn("lyrics:phase", (text) => {
+  $("lyrics-status").textContent = text;
+});
 
-  if (result.status === "found") {
-    lyricsCounts.found++;
-    logLyrics(`✓ ${label}  [${result.source}]`, "found");
-  } else if (result.status === "missing") {
-    lyricsCounts.missing++;
-    logLyrics(`· ${label} — not found${result.detail ? ` (${result.detail})` : ""}`, "missing");
+window.runtime.EventsOn("lyrics:track", (result) => {
+  // A track that was found and then failed to write comes back a second
+  // time, and its line is corrected rather than added again.
+  let row = lyricsByPath.get(result.path);
+  if (row && result.status === "unwritten") {
+    row.status = "unwritten";
+    row.detail = result.detail;
   } else {
-    lyricsCounts.failed++;
-    logLyrics(`✗ ${label} — ${result.detail}`, "error");
+    row = { ...result, node: el("div") };
+    lyricsRows.push(row);
+    if (result.path) lyricsByPath.set(result.path, row);
+  }
+  drawLyricsRow(row);
+
+  if (!showsRow(row)) {
+    row.node.remove();
+  } else if (!row.node.isConnected) {
+    const log = $("lyrics-log");
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    log.append(row.node);
+    if (atBottom) log.scrollTop = log.scrollHeight;
   }
   paintLyricsCounts();
 });

@@ -453,6 +453,20 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
 .stats-row b { color: var(--text); font-weight: 600; }
 .stats-row .err b { color: var(--err); }
 
+/* The lyrics counters narrow the log to what they count. */
+.stats-row .filter {
+  padding: 3px 8px;
+  margin: -3px -8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.stats-row .filter:hover { background: var(--card-hover); }
+.stats-row .filter.active { border-color: var(--accent); background: var(--accent-soft); }
+
 /* Lists ------------------------------------------------------------------ */
 
 .toolbar {
@@ -555,6 +569,13 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
 .log .missing { color: var(--muted); }
 .log .error { color: var(--err); }
 .log .note { color: var(--accent); }
+
+/* A pasted link for a track the search could not place. */
+.log .link-box { margin: 4px 0 8px 14px; font-family: system-ui, sans-serif; }
+.log .link-row { display: flex; align-items: center; gap: 8px; }
+.log .link-row .search { flex: 1; max-width: 420px; }
+.log .link-row .muted { color: var(--muted); font-size: 12px; }
+.lyrics-preview.compact { max-height: 140px; margin-top: 6px; }
 
 .notice {
   margin-top: 18px;

@@ -352,7 +352,7 @@ func TestAttemptsUseTheFileName(t *testing.T) {
 
 func TestFromURLRefusesWhatItCannotRead(t *testing.T) {
 	f := NewFinder()
-	for _, link := range []string{"", "not a link", "ftp://genius.com/x", "https://example.com/song"} {
+	for _, link := range []string{"", "not a link", "ftp://genius.com/x", "https:///song"} {
 		if _, err := f.FromURL(context.Background(), link); err == nil {
 			t.Errorf("%q was accepted", link)
 		}
