@@ -63,6 +63,11 @@ type Summary struct {
 
 	AlbumArtists []Name `json:"albumArtists"`
 
+	// Albums is the album list the library reduces to, and RawAlbums how many
+	// albums a player would show today.
+	Albums    []Album `json:"albums"`
+	RawAlbums int     `json:"rawAlbums"`
+
 	TrackCount       int `json:"trackCount"`
 	AlbumArtistCount int `json:"albumArtistCount"`
 	CompilationCount int `json:"compilationCount"`
@@ -121,6 +126,7 @@ func (l *Library) Summarize() Summary {
 	summary.RawArtists = len(raw)
 	summary.Targets = reduce(raw, artists)
 	summary.AlbumArtists = albumArtists.names()
+	summary.Albums, summary.RawAlbums = summarizeAlbums(l.Tracks)
 
 	return summary
 }

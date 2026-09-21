@@ -226,3 +226,25 @@ func TestNoRulesNoChanges(t *testing.T) {
 		t.Errorf("changes were built with no rules: %+v", changes)
 	}
 }
+
+// An album rename reaches the tracks it names, and a disc rejoining its
+// album keeps its number.
+func TestRenamesAlbums(t *testing.T) {
+	changes := Build(lib(
+		tags.Track{Path: "cd2.mp3", Artist: "X", Album: "Record (CD2)", TrackNo: 3},
+		tags.Track{Path: "other.mp3", Artist: "Y", Album: "Record (CD2)"},
+	), Rules{AlbumRename: map[string]string{"cd2.mp3": "Record"}}, noManual())
+
+	if len(changes) != 1 || changes[0].Path != "cd2.mp3" {
+		t.Fatalf("expected one change for cd2.mp3: %+v", changes)
+	}
+	if got := *changes[0].edit.Album; got != "Record" {
+		t.Errorf("Album = %q", got)
+	}
+	if got := changes[0].edit.DiscNo; got == nil || *got != 2 {
+		t.Errorf("DiscNo = %v, expected 2", got)
+	}
+	if got := Summarize(changes).AlbumRenamed; got != 1 {
+		t.Errorf("AlbumRenamed = %d", got)
+	}
+}

@@ -38,6 +38,13 @@ running total — *58 names in the files become 26 artists* — and opening it
 shows every single fold with a tick next to it. Untick what is wrong, or type
 a different artist into the heading and the ticked names go there instead.
 
+**Albums.** The same for albums, always within one artist — two artists' *Greatest
+Hits* stay two albums. Spellings, word order, editions (*(Deluxe)*, *[Explicit]*,
+*- Single*, *(Remastered 2011)*), a shared-by watermark and discs filed as albums
+of their own (*(CD1)*, *(CD2)*) fold into one album, and a disc keeps its number
+as it rejoins. Untick a name to keep it apart, rename an album, or merge it into
+another album by the same artist.
+
 **Tracks.** The whole library in one sortable table, the way a desktop player
 shows it. Select a few rows, or a few hundred, and set artist, album artist,
 album, title, genre, year, track and disc number on all of them at once. Right

@@ -79,6 +79,7 @@
 <main id="workspace" class="workspace" hidden>
   <nav class="sidebar">
     <button class="nav" data-view="artists" aria-current="true">Artists<span id="count-artists" class="pill"></span></button>
+    <button class="nav" data-view="albums">Albums<span id="count-albums" class="pill"></span></button>
     <button class="nav" data-view="tracks">Tracks<span id="count-tracks" class="pill"></span></button>
     <button class="nav" data-view="lyrics">Lyrics<span id="count-lyrics" class="pill"></span></button>
     <button class="nav" data-view="cleanup">Cleanup</button>
@@ -107,6 +108,27 @@
         <input id="artist-search" class="search" type="search" placeholder="Search artists…" />
       </div>
       <div id="artist-list" class="list"></div>
+    </article>
+
+    <!-- Albums -------------------------------------------------------- -->
+    <article class="view" data-view="albums" hidden>
+      <div class="headline">
+        <div class="headline-row">
+          <div>
+            <b id="albums-from">0</b> album names in the files become
+            <b id="albums-to">0</b> albums
+          </div>
+          <div class="grow"></div>
+          <button id="albums-changed" class="btn small" aria-pressed="false">Only merged</button>
+          <button id="albums-all" class="btn small">Merge everything</button>
+          <button id="albums-none" class="btn small">Keep everything apart</button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <input id="album-search" class="search" type="search" placeholder="Search albums or artists…" />
+      </div>
+      <div id="album-list" class="list"></div>
     </article>
 
     <!-- Tracks -------------------------------------------------------- -->

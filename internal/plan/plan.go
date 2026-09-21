@@ -34,6 +34,12 @@ type Rules struct {
 	// how several spellings and guest credits collapse onto one artist.
 	Rename map[string]string `json:"rename"`
 
+	// AlbumRename gives tracks another album name, by path. An album name is
+	// only unique together with the artist it is by, and the interface has
+	// already worked out which tracks make up each album, so it says exactly
+	// which tracks it means.
+	AlbumRename map[string]string `json:"albumRename"`
+
 	AlbumArtistMode   string `json:"albumArtistMode"`
 	RemoveCompilation bool   `json:"removeCompilation"`
 	RemoveSort        bool   `json:"removeSort"`
@@ -68,6 +74,7 @@ type Summary struct {
 	AlbumArtistClear  int `json:"albumArtistCleared"`
 	CompilationRemove int `json:"compilationRemoved"`
 	GenreSet          int `json:"genreSet"`
+	AlbumRenamed      int `json:"albumRenamed"`
 }
 
 // Build works out the edit for every track the choices touch. Manual carries
@@ -106,6 +113,15 @@ func buildOne(track tags.Track, rules Rules, manual tags.Edit) (Change, bool) {
 		year:        track.Year,
 		trackNo:     track.TrackNo,
 		discNo:      track.DiscNo,
+	}
+
+	if renamed := strings.TrimSpace(rules.AlbumRename[track.Path]); renamed != "" && renamed != want.album {
+		// A disc filed as an album of its own keeps its place in the album it
+		// rejoins, unless the track already says which disc it is on.
+		if disc := library.DiscOf(want.album); disc > 0 && want.discNo == 0 && library.DiscOf(renamed) == 0 {
+			want.discNo = disc
+		}
+		want.album = renamed
 	}
 
 	switch rules.AlbumArtistMode {
@@ -249,6 +265,9 @@ func Summarize(changes []Change) Summary {
 		}
 		if change.edit.Genre != nil {
 			summary.GenreSet++
+		}
+		if change.edit.Album != nil {
+			summary.AlbumRenamed++
 		}
 		if change.edit.AlbumArtist != nil {
 			if *change.edit.AlbumArtist == "" {
