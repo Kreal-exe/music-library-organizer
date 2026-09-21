@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -104,11 +105,23 @@ type fakeADB struct {
 	replies map[string]string
 	lines   []string // what Stream hands back
 	calls   []string
+	pushed  map[string]string // what was pushed, by where it went on the phone
 }
 
 func (f *fakeADB) Run(_ context.Context, args ...string) ([]byte, error) {
 	joined := strings.Join(args, " ")
 	f.calls = append(f.calls, joined)
+
+	if len(args) >= 3 && args[len(args)-3] == "push" {
+		content, err := os.ReadFile(args[len(args)-2])
+		if err != nil {
+			return nil, err
+		}
+		if f.pushed == nil {
+			f.pushed = map[string]string{}
+		}
+		f.pushed[args[len(args)-1]] = string(content)
+	}
 
 	for prefix, reply := range f.replies {
 		if strings.Contains(joined, prefix) {
@@ -264,11 +277,15 @@ func TestRescanReadsThePlaylistsAgain(t *testing.T) {
 	}}
 	phone := &Phone{adb: fake, Serial: "SERIAL1"}
 
-	phone.Rescan(context.Background(), []string{"/sdcard/Music/a.mp3"})
+	phone.Rescan(context.Background(), []string{"/sdcard/Music/a.mp3"}, nil)
 	phone.RescanPlaylists(context.Background(), "/sdcard/Music")
 
+	if got := fake.pushed[rescanPath]; got != "/sdcard/Music/a.mp3\x00" {
+		t.Errorf("the phone was sent %q to re-read", got)
+	}
+
 	want := []string{
-		"scan_file --arg '/sdcard/Music/a.mp3'",
+		"xargs -0 -P",
 		"touch '/sdcard/Music/Favourites.m3u'",
 		"scan_file --arg '/sdcard/Music/Favourites.m3u'",
 		"touch '/sdcard/Music/Рус.m3u'",
@@ -298,7 +315,7 @@ func TestRescanFallsBackToTheWholeVolume(t *testing.T) {
 	for i := range paths {
 		paths[i] = "/sdcard/Music/track.mp3"
 	}
-	phone.Rescan(context.Background(), paths)
+	phone.Rescan(context.Background(), paths, nil)
 	phone.RescanPlaylists(context.Background(), "/sdcard/Music")
 
 	if len(fake.calls) > 10 {
@@ -359,4 +376,45 @@ func countCalls(fake *fakeADB, phrase string) int {
 		}
 	}
 	return n
+}
+
+// The files are re-read on the phone several at a time from one list, and
+// each one done is counted, whatever its name holds.
+func TestRescanWorksThroughTheListOnThePhone(t *testing.T) {
+	paths := []string{"/sdcard/Music/It's \"Here\" $(now).mp3", "/sdcard/Music/Рус/b.flac"}
+	fake := &fakeADB{lines: []string{"scanned", "noise", "scanned\r"}}
+	phone := &Phone{adb: fake, Serial: "SERIAL1"}
+
+	var seen []Progress
+	phone.Rescan(context.Background(), paths, func(p Progress) { seen = append(seen, p) })
+
+	if got := fake.pushed[rescanPath]; got != paths[0]+"\x00"+paths[1]+"\x00" {
+		t.Errorf("the phone was sent %q", got)
+	}
+	if len(seen) != 2 || seen[1] != (Progress{Done: 2, Total: 2}) {
+		t.Errorf("progress = %+v", seen)
+	}
+	for _, call := range fake.calls {
+		if strings.Contains(call, "scan_file --arg '") {
+			t.Errorf("a file was re-read on its own: %s", call)
+		}
+	}
+}
+
+// Deleting quotes every name and reports only what is really gone.
+func TestDeleteRemovesAndChecks(t *testing.T) {
+	fake := &fakeADB{replies: map[string]string{"[ -e '/sdcard/Music/kept.m4a' ]": "yes"}}
+	phone := &Phone{adb: fake, Serial: "SERIAL1"}
+
+	gone, err := phone.Delete(context.Background(), []string{"/sdcard/Music/It's bad.m4a", "/sdcard/Music/kept.m4a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gone) != 1 || gone[0] != "/sdcard/Music/It's bad.m4a" {
+		t.Errorf("gone = %q", gone)
+	}
+	joined := strings.Join(fake.calls, "\n")
+	if !strings.Contains(joined, `rm -f -- '/sdcard/Music/It'\''s bad.m4a' '/sdcard/Music/kept.m4a'`) {
+		t.Errorf("rm was not quoted as expected:\n%s", joined)
+	}
 }

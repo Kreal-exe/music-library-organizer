@@ -466,9 +466,7 @@ func (a *App) Apply() (ApplyReport, error) {
 	}
 
 	report := ApplyReport{Failed: []plan.Result{}}
-	emit := throttle(func(p device.Progress) {
-		wr.EventsEmit(a.ctx, "apply:progress", map[string]int{"done": p.Done, "total": p.Total})
-	})
+	emit := a.stages("apply:progress")
 
 	err := a.write(ctx, items, emit, func(written device.Written) {
 		if written.Error != "" {
@@ -482,6 +480,9 @@ func (a *App) Apply() (ApplyReport, error) {
 	if err != nil && !report.Cancelled {
 		return report, err
 	}
+	if a.onPhone() {
+		emit(stagePlaylists, device.Progress{})
+	}
 	a.finished(ctx)
 
 	a.mu.Lock()
@@ -491,14 +492,54 @@ func (a *App) Apply() (ApplyReport, error) {
 	return report, nil
 }
 
-// write sends a batch of edits wherever the collection lives.
-func (a *App) write(ctx context.Context, items []wire.Item, report func(device.Progress), onFile func(device.Written)) error {
+// The stages of writing, as the interface is told about them. On a phone the
+// writing itself is the quick part: having the media database read the files
+// again and putting the playlists back take longer, and a progress bar that
+// stopped at the last file written looked like a hang.
+const (
+	stageWrite     = "write"
+	stageRescan    = "rescan"
+	stagePlaylists = "playlists"
+)
+
+// stages reports progress under an event, a few times a second — but always
+// the first report of a stage and the last of it, so the interface never sits
+// on a number the job has long since passed.
+func (a *App) stages(event string) func(string, device.Progress) {
+	var (
+		mu    sync.Mutex
+		stage string
+		last  time.Time
+	)
+	return func(current string, p device.Progress) {
+		mu.Lock()
+		if current == stage && p.Done < p.Total && time.Since(last) < progressInterval {
+			mu.Unlock()
+			return
+		}
+		stage, last = current, time.Now()
+		mu.Unlock()
+
+		wr.EventsEmit(a.ctx, event, map[string]any{"stage": current, "done": p.Done, "total": p.Total})
+	}
+}
+
+// write sends a batch of edits wherever the collection lives. report, which
+// may be nil, hears how far each stage has got.
+func (a *App) write(ctx context.Context, items []wire.Item, report func(string, device.Progress), onFile func(device.Written)) error {
 	a.mu.Lock()
 	phone := a.phone
 	a.mu.Unlock()
 
+	at := func(stage string) func(device.Progress) {
+		if report == nil {
+			return nil
+		}
+		return func(p device.Progress) { report(stage, p) }
+	}
+
 	if phone != nil {
-		if err := phone.Apply(ctx, items, report, onFile); err != nil {
+		if err := phone.Apply(ctx, items, at(stageWrite), onFile); err != nil {
 			return err
 		}
 		// The phone's media database still holds the old tags until it is told
@@ -508,7 +549,7 @@ func (a *App) write(ctx context.Context, items []wire.Item, report func(device.P
 		for _, item := range items {
 			paths = append(paths, item.Path)
 		}
-		phone.Rescan(ctx, paths)
+		phone.Rescan(ctx, paths, at(stageRescan))
 		return nil
 	}
 
@@ -525,7 +566,7 @@ func (a *App) write(ctx context.Context, items []wire.Item, report func(device.P
 			onFile(written)
 		}
 		if report != nil {
-			report(device.Progress{Done: i + 1, Total: len(items)})
+			report(stageWrite, device.Progress{Done: i + 1, Total: len(items)})
 		}
 	}
 	return nil
@@ -808,6 +849,68 @@ func selectTracks(lib *library.Library, opts LyricsOptions) []tags.Track {
 		out = append(out, track)
 	}
 	return out
+}
+
+// DeleteUnreadable removes files the scan could not read — damaged downloads,
+// most often, that a player cannot play either. Only files the last scan
+// reported as unreadable can go this way, whatever the interface asks for,
+// and it returns the ones that are gone.
+func (a *App) DeleteUnreadable(paths []string) ([]string, error) {
+	a.mu.Lock()
+	lib, phone := a.lib, a.phone
+	a.mu.Unlock()
+	if lib == nil {
+		return nil, errors.New("scan a library first")
+	}
+
+	unreadable := map[string]bool{}
+	for _, failure := range lib.Errors {
+		unreadable[failure.Path] = true
+	}
+	var chosen []string
+	for _, path := range paths {
+		if unreadable[path] {
+			chosen = append(chosen, path)
+		}
+	}
+	if len(chosen) == 0 {
+		return []string{}, nil
+	}
+
+	var gone []string
+	if phone != nil {
+		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Minute)
+		defer cancel()
+		var err error
+		if gone, err = phone.Delete(ctx, chosen); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, path := range chosen {
+			if err := os.Remove(path); err == nil || errors.Is(err, os.ErrNotExist) {
+				gone = append(gone, path)
+			}
+		}
+	}
+
+	removed := map[string]bool{}
+	for _, path := range gone {
+		removed[path] = true
+	}
+	a.mu.Lock()
+	kept := lib.Errors[:0:0]
+	for _, failure := range lib.Errors {
+		if !removed[failure.Path] {
+			kept = append(kept, failure)
+		}
+	}
+	lib.Errors = kept
+	a.mu.Unlock()
+
+	if gone == nil {
+		gone = []string{}
+	}
+	return gone, nil
 }
 
 // RevealFile opens the system file manager with the file selected, which is

@@ -1013,3 +1013,23 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
 .variant .badge { padding: 1px 7px; font-size: 10.5px; }
 .junk { margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .junk .group-variants { margin-left: 0; }
+
+/* Unreadable files and album names that are no album ---------------------- */
+
+.broken-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto;
+  margin: 10px 0; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.broken-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; cursor: pointer;
+  border-top: 1px solid var(--line-soft); }
+.broken-row:first-child { border-top: none; }
+.broken-row input { margin-top: 3px; accent-color: var(--accent); }
+.row-sub.path, .count.path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  word-break: break-all; }
+.check.inline { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+.btn.danger { border-color: var(--err, #c0392b); color: var(--err, #c0392b); }
+.btn.danger:disabled { opacity: .5; }
+.link { padding: 0; border: none; background: none; color: var(--accent); font: inherit; cursor: pointer;
+  text-decoration: underline dotted; }
+.junk-tracks { margin: 2px 0 8px 26px; }
+.junk-tracks .album-track { display: flex; gap: 10px; }
+.junk-tracks .name { flex: 1; min-width: 0; }
+.junk-tracks .count.path { flex: 1.2; color: var(--muted); }

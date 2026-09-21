@@ -43,6 +43,15 @@ type Rules struct {
 	// carrying a name that is no album, such as the site they came from.
 	ClearAlbum []string `json:"clearAlbum"`
 
+	// AlbumArtistSet gives tracks the album artist the rest of their album
+	// carries, by path. A player files an album by its name and its album
+	// artist together, so one album whose tracks disagree on the second shows
+	// up as two albums of the same name.
+	AlbumArtistSet map[string]string `json:"albumArtistSet"`
+	// ClearCompilation lists the tracks whose compilation flag goes, by path:
+	// a stray flag on one track of an album files that track apart.
+	ClearCompilation []string `json:"clearCompilation"`
+
 	AlbumArtistMode   string `json:"albumArtistMode"`
 	RemoveCompilation bool   `json:"removeCompilation"`
 	RemoveSort        bool   `json:"removeSort"`
@@ -83,14 +92,14 @@ type Summary struct {
 // Build works out the edit for every track the choices touch. Manual carries
 // the edits made to individual tracks, keyed by path.
 func Build(lib *library.Library, rules Rules, manual map[string]tags.Edit) []Change {
-	clear := make(map[string]bool, len(rules.ClearAlbum))
-	for _, path := range rules.ClearAlbum {
-		clear[path] = true
+	sets := trackSets{
+		clearAlbum:       pathSet(rules.ClearAlbum),
+		clearCompilation: pathSet(rules.ClearCompilation),
 	}
 
 	changes := []Change{}
 	for _, track := range lib.Tracks {
-		if change, ok := buildOne(track, rules, clear[track.Path], manual[track.Path]); ok {
+		if change, ok := buildOne(track, rules, sets, manual[track.Path]); ok {
 			changes = append(changes, change)
 		}
 	}
@@ -111,7 +120,21 @@ type wanted struct {
 	discNo      int
 }
 
-func buildOne(track tags.Track, rules Rules, clearAlbum bool, manual tags.Edit) (Change, bool) {
+// trackSets are the rules that name tracks by path, ready to be looked up.
+type trackSets struct {
+	clearAlbum       map[string]bool
+	clearCompilation map[string]bool
+}
+
+func pathSet(paths []string) map[string]bool {
+	set := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		set[path] = true
+	}
+	return set
+}
+
+func buildOne(track tags.Track, rules Rules, sets trackSets, manual tags.Edit) (Change, bool) {
 	want := wanted{
 		artist:      rename(track.Artist, rules),
 		albumArtist: rename(track.AlbumArtist, rules),
@@ -131,7 +154,7 @@ func buildOne(track tags.Track, rules Rules, clearAlbum bool, manual tags.Edit) 
 		}
 		want.album = renamed
 	}
-	if clearAlbum {
+	if sets.clearAlbum[track.Path] {
 		want.album = ""
 	}
 
@@ -140,6 +163,11 @@ func buildOne(track tags.Track, rules Rules, clearAlbum bool, manual tags.Edit) 
 		want.albumArtist = ""
 	case AlbumArtistFromArtist:
 		want.albumArtist = want.artist
+	}
+	// Removing every album artist leaves the albums in agreement already;
+	// otherwise the one the album shares wins over what the mode made of it.
+	if shared, ok := rules.AlbumArtistSet[track.Path]; ok && rules.AlbumArtistMode != AlbumArtistClear {
+		want.albumArtist = strings.TrimSpace(shared)
 	}
 
 	// An edit made by hand to this track overrides whatever the rules decided.
@@ -196,7 +224,7 @@ func buildOne(track tags.Track, rules Rules, clearAlbum bool, manual tags.Edit) 
 		change.edit.Lyrics = manual.Lyrics
 		change.Fields = append(change.Fields, Field{"Lyrics", summarise(track.Lyrics), summarise(*manual.Lyrics)})
 	}
-	if (rules.RemoveCompilation || manual.RemoveCompilation) && track.Compilation {
+	if (rules.RemoveCompilation || manual.RemoveCompilation || sets.clearCompilation[track.Path]) && track.Compilation {
 		change.edit.RemoveCompilation = true
 		change.Fields = append(change.Fields, Field{"Compilation flag", "yes", ""})
 	}

@@ -29,9 +29,16 @@ import (
 // Where the agent lives on the phone. /data/local/tmp is the one place the adb
 // shell user may both write to and execute from.
 const (
-	agentPath = "/data/local/tmp/mlm-agent"
-	planPath  = "/data/local/tmp/mlm-plan.json"
+	agentPath  = "/data/local/tmp/mlm-agent"
+	planPath   = "/data/local/tmp/mlm-plan.json"
+	rescanPath = "/data/local/tmp/mlm-rescan.txt"
 )
+
+// How many files the phone is asked to re-read at once. Each request starts a
+// program on the phone that takes about a second to answer, nearly all of it
+// spent starting up, so one at a time made a job of 1222 files wait twenty
+// minutes; eight at once take a sixth of that.
+const rescanJobs = 8
 
 // ErrNoAgent means no agent build is available for this phone.
 var ErrNoAgent = errors.New("no agent build for this phone")
@@ -340,7 +347,11 @@ func trimCR(line []byte) []byte {
 // It says nothing about playlists: those are put right once, by
 // RescanPlaylists, when the whole job is over. Doing it after every batch of
 // files costs half a minute each time and is undone by the next batch anyway.
-func (p *Phone) Rescan(ctx context.Context, paths []string) {
+//
+// The list of files goes to the phone in one piece and is worked through there,
+// several files at a time, with a line coming back as each one is done, which
+// is what report counts.
+func (p *Phone) Rescan(ctx context.Context, paths []string, report func(Progress)) {
 	const maxFiles = 2000
 
 	if len(paths) > maxFiles {
@@ -349,13 +360,91 @@ func (p *Phone) Rescan(ctx context.Context, paths []string) {
 			"content call --uri content://media --method scan_volume --arg external_primary")
 		return
 	}
+	if len(paths) == 0 {
+		return
+	}
 
-	for _, path := range paths {
+	if err := p.rescanTogether(ctx, paths, report); err == nil || ctx.Err() != nil {
+		return
+	}
+
+	// The list could not be sent or worked through, so the files are asked
+	// for one by one, which is slow but needs nothing on the phone.
+	for i, path := range paths {
 		if ctx.Err() != nil {
 			return
 		}
 		p.scanFile(ctx, path)
+		if report != nil {
+			report(Progress{Done: i + 1, Total: len(paths)})
+		}
 	}
+}
+
+// rescanTogether sends the list and has the phone re-read it rescanJobs files
+// at a time. The paths travel separated by NUL bytes and reach the command as
+// a single argument each, so no name needs quoting however it is spelled.
+func (p *Phone) rescanTogether(ctx context.Context, paths []string, report func(Progress)) error {
+	local := filepath.Join(os.TempDir(), "mlm-rescan.txt")
+	if err := os.WriteFile(local, []byte(strings.Join(paths, "\x00")+"\x00"), 0o600); err != nil {
+		return err
+	}
+	defer os.Remove(local)
+
+	if _, err := p.run(ctx, "push", local, rescanPath); err != nil {
+		return err
+	}
+	defer func() { _, _ = p.run(context.WithoutCancel(ctx), "shell", "rm -f "+rescanPath) }()
+
+	command := fmt.Sprintf("xargs -0 -P %d -n 1 sh -c "+
+		`'content call --uri content://media/external --method scan_file --arg "$0" >/dev/null 2>&1; echo scanned'`+
+		" < %s", rescanJobs, rescanPath)
+
+	done := 0
+	return p.adb.Stream(ctx, func(line []byte) error {
+		if string(trimCR(line)) != "scanned" {
+			return nil
+		}
+		done++
+		if report != nil {
+			report(Progress{Done: done, Total: len(paths)})
+		}
+		return nil
+	}, "-s", p.Serial, "exec-out", command)
+}
+
+// Delete removes files from the phone and has the media database forget
+// them. It reports the paths that are gone afterwards, which is what the
+// interface trusts rather than the command's exit status.
+func (p *Phone) Delete(ctx context.Context, paths []string) ([]string, error) {
+	const perCommand = 50 // A shell line has a length limit.
+
+	for start := 0; start < len(paths); start += perCommand {
+		chunk := paths[start:min(start+perCommand, len(paths))]
+		quoted := make([]string, len(chunk))
+		for i, path := range chunk {
+			quoted[i] = shellQuote(path)
+		}
+		if _, err := p.run(ctx, "shell", "rm -f -- "+strings.Join(quoted, " ")); err != nil {
+			return nil, err
+		}
+	}
+
+	var gone []string
+	for _, path := range paths {
+		if !p.exists(ctx, path) {
+			gone = append(gone, path)
+		}
+	}
+	// A scan of a file that is no longer there drops it from the database.
+	p.Rescan(ctx, gone, nil)
+	return gone, nil
+}
+
+// exists says whether a file is on the phone.
+func (p *Phone) exists(ctx context.Context, path string) bool {
+	out, err := p.run(ctx, "shell", "[ -e "+shellQuote(path)+" ] && echo yes")
+	return err == nil && strings.TrimSpace(string(out)) == "yes"
 }
 
 // RescanPlaylists asks the phone to read its playlist files again.

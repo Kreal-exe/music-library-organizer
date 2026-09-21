@@ -262,3 +262,28 @@ func TestClearsAlbum(t *testing.T) {
 		t.Errorf("Album = %v, expected it cleared", got)
 	}
 }
+
+// One album whose tracks disagree on the album artist is two albums on a
+// phone; the tracks that lack it are given the one the rest carry.
+func TestAlbumArtistMadeTheSameAcrossAnAlbum(t *testing.T) {
+	changes := Build(lib(
+		tags.Track{Path: "a.mp3", Artist: "Juice WRLD", AlbumArtist: "Juice WRLD", Album: "JUICE UNRELEASED"},
+		tags.Track{Path: "b.mp3", Artist: "Juice WRLD", Album: "JUICE UNRELEASED"},
+		tags.Track{Path: "c.mp3", Artist: "Juice WRLD", AlbumArtist: "Juice WRLD", Album: "JUICE UNRELEASED", Compilation: true},
+	), Rules{
+		AlbumArtistSet:   map[string]string{"b.mp3": "Juice WRLD"},
+		ClearCompilation: []string{"c.mp3"},
+	}, noManual())
+
+	b, ok := find(changes, "b.mp3")
+	if !ok || b.edit.AlbumArtist == nil || *b.edit.AlbumArtist != "Juice WRLD" {
+		t.Errorf("b.mp3 = %+v", b)
+	}
+	c, ok := find(changes, "c.mp3")
+	if !ok || !c.edit.RemoveCompilation {
+		t.Errorf("c.mp3 = %+v", c)
+	}
+	if _, ok := find(changes, "a.mp3"); ok {
+		t.Error("a.mp3 already agreed and should not change")
+	}
+}

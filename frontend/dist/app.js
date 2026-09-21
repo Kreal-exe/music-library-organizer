@@ -29,6 +29,8 @@ const state = {
   albumRenamed: new Map(),
   // Album names to remove from their tracks altogether.
   albumCleared: new Set(),
+  // Albums, by id, whose tracks are left disagreeing on the album artist.
+  albumArtistKept: new Set(),
 
   albumArtistMode: "keep",
   removeCompilation: false,
@@ -327,6 +329,7 @@ async function applyScan(result) {
   state.moved.clear();
   state.albumDetached.clear();
   state.albumRenamed.clear();
+  state.albumArtistKept.clear();
   // A site's name is nobody's album, so it goes unless the user keeps it; a
   // name merely shared by several artists is only a guess and stays.
   state.albumCleared = new Set(summary.junkAlbums.filter((j) => j.reason === "site").map((j) => j.value));
@@ -382,6 +385,7 @@ function rules() {
     rename: renames(),
     albumRename: albumRenames(),
     clearAlbum: clearedPaths(),
+    ...albumArtistRules(),
     albumArtistMode: state.albumArtistMode,
     removeCompilation: state.removeCompilation,
     removeSort: state.removeSort,
@@ -832,6 +836,7 @@ $("albums-changed").addEventListener("click", () => {
 
 $("albums-all").addEventListener("click", () => {
   state.albumDetached.clear();
+  state.albumArtistKept.clear();
   renderAlbums();
   refreshPending();
 });
@@ -840,6 +845,7 @@ $("albums-none").addEventListener("click", () => {
   for (const album of state.summary.albums) {
     for (const source of album.sources) state.albumDetached.add(albumId(album.owner, source.value));
   }
+  for (const group of albumGroups) state.albumArtistKept.add(group.id);
   renderAlbums();
   refreshPending();
 });
@@ -880,6 +886,7 @@ function buildAlbumGroups() {
   // An album whose name is being removed from every track is gone.
   for (const [id, group] of found) {
     if (!group.tracks.length) found.delete(id);
+    else group.fix = albumArtistFix(group);
   }
 
   return [...found.values()].sort((a, b) =>
@@ -916,7 +923,8 @@ function renderAlbumMergeSummary() {
     }
   }
 
-  if (!byTarget.size) {
+  const fixes = albumGroups.filter((g) => g.fix);
+  if (!byTarget.size && !fixes.length) {
     panel.append(el("div", "row-sub", "No album is being merged."));
     return;
   }
@@ -924,6 +932,38 @@ function renderAlbumMergeSummary() {
   const blocks = [...byTarget.values()].sort((a, b) =>
     b.sources.length - a.sources.length || a.name.localeCompare(b.name));
   for (const block of blocks) panel.append(albumSummaryGroup(block));
+  if (fixes.length) panel.append(albumFixGroup(fixes));
+}
+
+// albumFixGroup lists the albums whose tracks are made to agree on the album
+// artist, each with a tick to leave it as it is.
+function albumFixGroup(fixes) {
+  const block = el("div", "summary-group");
+  const head = el("div", "summary-head");
+  head.append(el("b", null, "One album, one album artist"),
+    el("span", "count", "a phone shows an album twice when its tracks disagree"));
+  block.append(head);
+
+  for (const group of fixes) {
+    const row = el("label", "summary-row");
+    const kept = state.albumArtistKept.has(group.id);
+    if (kept) row.classList.add("off");
+
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = !kept;
+    box.addEventListener("change", () => {
+      if (box.checked) state.albumArtistKept.delete(group.id);
+      else state.albumArtistKept.add(group.id);
+      renderAlbums();
+      refreshPending();
+    });
+
+    row.append(box, el("span", "from", group.name), el("span", "arrow", "·"),
+      el("span", "to", fixText(group.fix)), el("span", "count", group.artist));
+    block.append(row);
+  }
+  return block;
 }
 
 function albumSummaryGroup({ owner, name, artist, sources }) {
@@ -1025,11 +1065,102 @@ function renderJunkAlbums() {
       refreshPending();
     });
 
-    row.append(box, el("span", null, item.value));
+    // The name opens the list of tracks that carry it, so it is plain what a
+    // tick would touch before anything is ticked.
+    const open = junkExpanded.has(item.value);
+    const name = el("button", "link", item.value);
+    name.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (junkExpanded.has(item.value)) junkExpanded.delete(item.value);
+      else junkExpanded.add(item.value);
+      renderJunkAlbums();
+    });
+
+    row.append(box, name);
     row.append(el("span", "badge", item.reason === "site" ? "site name" : `on ${item.artists} artists`));
-    row.append(el("span", "count", `${tracks(item.tracks)} · ${plural(item.artists, "artist")}`));
+    row.append(el("span", "count", `${tracks(item.tracks)} · ${plural(item.artists, "artist")} · ${open ? "hide" : "show"}`));
     list.append(row);
+
+    if (open) {
+      const byPath = new Map(state.tracks.map((t) => [t.path, t]));
+      const detail = el("div", "junk-tracks");
+      const rows = (item.paths || []).map((p) => byPath.get(p)).filter(Boolean)
+        .sort((a, b) => String(a.artist).localeCompare(String(b.artist)) || String(a.title).localeCompare(String(b.title)));
+      for (const track of rows) {
+        const line = el("div", "album-track");
+        line.append(el("span", "name", `${track.artist || "—"} — ${track.title || baseName(track.path)}`),
+          el("span", "count path", track.path));
+        line.addEventListener("contextmenu", (event) => openTrackMenu(event, track));
+        detail.append(line);
+      }
+      list.append(detail);
+    }
   }
+}
+
+const junkExpanded = new Set();
+
+// albumArtistFix works out how an album's tracks come to agree on who the
+// album is by. A phone files an album by its name and its album artist, or by
+// its name and its folder when there is no album artist — so "JUICE
+// UNRELEASED" with the album artist on 1100 tracks and missing from 112 is two
+// albums there. The album artist is not needed, only agreement: the tracks
+// that disagree take whatever most of the album has, after the artist renames,
+// and that can be none at all when the album sits in one folder. A stray
+// compilation flag, which files a track apart the same way, goes too.
+function albumArtistFix(group) {
+  const rename = renames();
+  const artistOf = (track) => {
+    const raw = (track.albumArtist || "").trim();
+    return rename[raw] || raw;
+  };
+
+  const folder = (track) => String(track.path).replace(/[\\/][^\\/]*$/, "");
+  const oneFolder = group.tracks.every((t) => folder(t) === folder(group.tracks[0]));
+
+  const counts = new Map();
+  for (const track of group.tracks) {
+    const name = artistOf(track);
+    // Without an album artist the folder holds an album together, so none is
+    // only a way to agree when there is one folder.
+    if (name || oneFolder) counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  const flagged = group.tracks.filter((t) => t.compilation);
+  // Flags on most of the album mean it really is a compilation.
+  const compilation = flagged.length && flagged.length * 2 < group.tracks.length ? flagged : [];
+
+  let artist = null;
+  for (const [name, count] of counts) {
+    if (artist === null || count > counts.get(artist)) artist = name;
+  }
+  const paths = artist === null ? [] : group.tracks.filter((t) => artistOf(t) !== artist).map((t) => t.path);
+
+  if (!paths.length && !compilation.length) return null;
+  return { artist, paths, compilation: compilation.map((t) => t.path) };
+}
+
+// albumArtistRules is what the plan needs to make each album agree.
+function albumArtistRules() {
+  const albumArtistSet = {};
+  const clearCompilation = [];
+  for (const group of albumGroups) {
+    if (!group.fix || state.albumArtistKept.has(group.id)) continue;
+    for (const path of group.fix.paths) albumArtistSet[path] = group.fix.artist;
+    clearCompilation.push(...group.fix.compilation);
+  }
+  return { albumArtistSet, clearCompilation };
+}
+
+// fixText says in a few words what making an album agree changes.
+function fixText(fix) {
+  const parts = [];
+  if (fix.paths.length) {
+    parts.push(fix.artist
+      ? `album artist → ${fix.artist} on ${tracks(fix.paths.length)}`
+      : `album artist removed from ${tracks(fix.paths.length)}`);
+  }
+  if (fix.compilation.length) parts.push(`compilation flag off on ${tracks(fix.compilation.length)}`);
+  return parts.join(", ");
 }
 
 // albumRenames is what the plan needs: the new album name of every track
@@ -1071,7 +1202,7 @@ function renderAlbums() {
   for (const group of albumGroups) {
     const folded = group.sources.some((s) => s.value !== group.name);
     // A name kept apart still counts as a merge to look at: it is a decision.
-    const touched = folded || group.sources.some((s) => s.value !== s.proposed);
+    const touched = folded || group.fix || group.sources.some((s) => s.value !== s.proposed);
     if (onlyChanged && !touched) continue;
     if (needle) {
       const haystack = [group.name, group.artist, ...group.sources.map((s) => s.value)].join(" ").toLowerCase();
@@ -1097,6 +1228,7 @@ function albumRow(group) {
 
   const parts = [group.artist, tracks(group.tracks.length)];
   if (folded.length) parts.push(`${folded.length} folded in`);
+  if (group.fix && !state.albumArtistKept.has(group.id)) parts.push(fixText(group.fix));
   main.append(el("div", "row-sub", parts.join(" · ")));
 
   const details = el("button", "btn small", albumExpanded.has(group.id) ? "Hide" : "Details");
@@ -1116,7 +1248,7 @@ function albumRow(group) {
   block.append(head);
 
   if (albumExpanded.has(group.id)) block.append(albumDetails(group));
-  if (folded.length) block.classList.add("changed");
+  if (folded.length || (group.fix && !state.albumArtistKept.has(group.id))) block.classList.add("changed");
   return block;
 }
 
@@ -1295,17 +1427,83 @@ function renderCleanup(result) {
     ? `${tracks(s.legacyCount)} carry one — a phone reads it instead of the real tags`
     : "no file carries one";
 
-  const failures = result.errors || [];
-  const errors = $("scan-errors");
-  if (failures.length) {
-    errors.hidden = false;
-    errors.textContent =
-      `Could not read ${files(failures.length)}. ` +
-      `For example: ${failures[0].path} — ${failures[0].reason}`;
-  } else {
-    errors.hidden = true;
-  }
+  state.broken = result.errors || [];
+  brokenTicked.clear();
+  renderBroken();
 }
+
+/* Files that could not be read --------------------------------------------- */
+
+// The files a scan could not read, each with where it is and why, so the
+// damaged ones can be found — and deleted, which nothing else here does. Only
+// ticked files go, and only after the user confirms the list once more.
+const brokenTicked = new Set();
+
+function renderBroken() {
+  const broken = state.broken || [];
+  $("broken").hidden = broken.length === 0;
+  const list = $("broken-list");
+  list.replaceChildren();
+
+  for (const failure of broken) {
+    const row = el("label", "broken-row");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = brokenTicked.has(failure.path);
+    box.addEventListener("change", () => {
+      if (box.checked) brokenTicked.add(failure.path);
+      else brokenTicked.delete(failure.path);
+      updateBrokenButtons();
+    });
+
+    const text = el("div", "row-main");
+    text.append(el("div", "row-name", baseName(failure.path)),
+      el("div", "row-sub path", failure.path),
+      el("div", "row-sub", failure.reason));
+    row.append(box, text);
+    list.append(row);
+  }
+  updateBrokenButtons();
+}
+
+function updateBrokenButtons() {
+  const broken = state.broken || [];
+  $("broken-delete").disabled = brokenTicked.size === 0;
+  $("broken-delete").textContent = brokenTicked.size
+    ? `Delete ${files(brokenTicked.size)}…` : "Delete ticked files…";
+  $("broken-all").checked = broken.length > 0 && broken.every((f) => brokenTicked.has(f.path));
+}
+
+$("broken-all").addEventListener("change", (event) => {
+  for (const failure of state.broken || []) {
+    if (event.target.checked) brokenTicked.add(failure.path);
+    else brokenTicked.delete(failure.path);
+  }
+  renderBroken();
+});
+
+$("broken-delete").addEventListener("click", async () => {
+  const chosen = [...brokenTicked];
+  if (!chosen.length) return;
+  const where = state.onPhone ? "from the phone" : "from this computer";
+  const sure = window.confirm(`Delete ${files(chosen.length)} ${where}? This cannot be undone.\n\n` +
+    chosen.slice(0, 12).join("\n") + (chosen.length > 12 ? `\n…and ${chosen.length - 12} more` : ""));
+  if (!sure) return;
+
+  $("broken-delete").disabled = true;
+  try {
+    const gone = (await go().DeleteUnreadable(chosen)) || [];
+    const removed = new Set(gone);
+    state.broken = state.broken.filter((f) => !removed.has(f.path));
+    for (const path of gone) brokenTicked.delete(path);
+    renderBroken();
+    const left = chosen.length - gone.length;
+    toast(left ? `Deleted ${files(gone.length)}, ${left} could not be deleted` : `Deleted ${files(gone.length)}`, left > 0);
+  } catch (err) {
+    toast(String(err), true);
+    updateBrokenButtons();
+  }
+});
 
 /* Tracks ------------------------------------------------------------------- */
 
@@ -1823,8 +2021,18 @@ async function runApply() {
   rescan();
 }
 
+// Writing to a phone has three stages, and the writing is the quick one: the
+// phone then has to read every changed file again, and put its playlists
+// back. Each is named, so a long wait is never a number that stopped moving.
+const applyStages = {
+  write: (p) => (state.onPhone ? `Writing tags on the phone: ${p.done} of ${p.total}` : `Writing tags: ${p.done} of ${p.total}`),
+  rescan: (p) => `Phone is re-reading the changed files: ${p.done} of ${p.total}`,
+  playlists: () => "Putting the playlists back on the phone…",
+};
+
 window.runtime.EventsOn("apply:progress", (p) => {
-  $("pending").textContent = `Applying ${p.done} of ${p.total}`;
+  const describe = applyStages[p.stage] || applyStages.write;
+  $("pending").textContent = describe(p);
 });
 
 /* Lyrics ------------------------------------------------------------------- */

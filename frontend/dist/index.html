@@ -215,7 +215,17 @@
       <label class="check"><input type="checkbox" id="rule-backup" />
         <span><b>Keep a copy of every file changed</b><em>written as <code>.bak</code> next to the original</em></span></label>
 
-      <div id="scan-errors" class="notice" hidden></div>
+      <div id="broken" hidden>
+        <h2>Files that could not be read</h2>
+        <div class="row-sub">Damaged files, most often a download that stopped half way — a player
+          cannot play them either. Ticked files are deleted when you press the button.</div>
+        <div id="broken-list" class="broken-list"></div>
+        <div class="row">
+          <label class="check inline"><input type="checkbox" id="broken-all" /> <span>All</span></label>
+          <div class="grow"></div>
+          <button id="broken-delete" class="btn danger small" disabled>Delete ticked files…</button>
+        </div>
+      </div>
     </article>
 
   </section>
