@@ -2025,11 +2025,14 @@ function fillBubble() {
     const open = bubbleOpen.has(entry.key);
 
     const head = el("button", "bubble-change");
+    const where = `${tracks(songs.length)}${albums.length
+      ? ` · ${albums.slice(0, 2).join(", ")}${albums.length > 2 ? ` +${albums.length - 2}` : ""}` : ""}`;
+    const sub = el("span", "bubble-sub", where);
+    sub.title = where; // All of it, when it is cut short.
     head.append(
       el("span", "bubble-caret", open ? "▾" : "▸"),
       el("span", "bubble-what", `${entry.field.name}: ${entry.field.before || "—"} → ${entry.field.after || "—"}`),
-      el("span", "bubble-sub", `${tracks(songs.length)}${albums.length
-        ? ` · ${albums.slice(0, 2).join(", ")}${albums.length > 2 ? ` +${albums.length - 2}` : ""}` : ""}`),
+      sub,
     );
     head.addEventListener("click", () => toggleBubble(entry.key));
     list.append(head);
@@ -2066,10 +2069,20 @@ function showBubble() {
     fillBubble();
     bubble.hidden = false;
   }
+  placeBubble();
+}
+
+// placeBubble sets the bubble just above the count, and again whenever the
+// window changes size while it is open.
+function placeBubble() {
+  const bubble = $("pending-bubble");
+  if (bubble.hidden) return;
   const anchor = $("pending").getBoundingClientRect();
   bubble.style.left = `${Math.max(12, anchor.left)}px`;
   bubble.style.bottom = `${window.innerHeight - anchor.top + 12}px`;
 }
+
+window.addEventListener("resize", placeBubble);
 
 function hideBubbleSoon() {
   clearTimeout(bubbleTimer);

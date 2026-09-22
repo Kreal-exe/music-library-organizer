@@ -1073,7 +1073,18 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
 }
 .bubble-change:hover, .bubble-song:hover { background: var(--accent-soft); }
 .bubble-caret { flex-shrink: 0; width: 12px; color: var(--muted); }
-.bubble-what { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; }
+/* The change is what matters and keeps its width; the songs and albums beside
+   it take what is left, on one line, cut short where they run out. */
+.bubble-what { flex: 0 1 auto; min-width: min(45%, 16em); font-size: 12.5px; font-weight: 500; }
+.bubble-change > .bubble-sub,
+.bubble-song > .bubble-sub {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .bubble-song { padding: 5px 0 5px 20px; border-top: none; font-size: 12px; }
 .bubble-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bubble-path { padding: 0 0 6px 20px; color: var(--muted); font-size: 10.5px; word-break: break-all;
