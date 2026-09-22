@@ -29,8 +29,9 @@ const state = {
   albumRenamed: new Map(),
   // Album names to remove from their tracks altogether.
   albumCleared: new Set(),
-  // Albums, by id, whose tracks are left disagreeing on the album artist.
-  albumArtistKept: new Set(),
+  // Albums, by id, whose tracks are made to agree on the album artist. Only
+  // what the user ticks: nothing is suggested into a change on its own.
+  albumArtistFixed: new Set(),
 
   albumArtistMode: "keep",
   removeCompilation: false,
@@ -329,10 +330,20 @@ async function applyScan(result) {
   state.moved.clear();
   state.albumDetached.clear();
   state.albumRenamed.clear();
-  state.albumArtistKept.clear();
-  // A site's name is nobody's album, so it goes unless the user keeps it; a
-  // name merely shared by several artists is only a guess and stays.
-  state.albumCleared = new Set(summary.junkAlbums.filter((j) => j.reason === "site").map((j) => j.value));
+  state.albumArtistFixed.clear();
+  // Every merge, fix and removal starts unticked: the lists are suggestions,
+  // and nothing in the files changes until the user ticks it.
+  state.albumCleared = new Set();
+  for (const target of summary.targets) {
+    for (const source of target.sources) {
+      if (source.value !== target.name) state.detached.add(source.value);
+    }
+  }
+  for (const album of summary.albums) {
+    for (const source of album.sources) {
+      if (source.value !== album.name) state.albumDetached.add(albumId(album.owner, source.value));
+    }
+  }
   expanded.clear();
   albumExpanded.clear();
   selection.clear();
@@ -399,19 +410,6 @@ function rules() {
 
 $("artist-search").addEventListener("input", renderArtists);
 
-$("artists-all").addEventListener("click", () => {
-  state.detached.clear();
-  renderArtists();
-  refreshPending();
-});
-
-$("artists-none").addEventListener("click", () => {
-  for (const target of state.summary.targets) {
-    for (const source of target.sources) state.detached.add(source.value);
-  }
-  renderArtists();
-  refreshPending();
-});
 
 // targetName is what an artist ends up called, once the renames apply.
 function targetName(target) {
@@ -507,6 +505,34 @@ function drawArtists() {
   }
 }
 
+/* Ticking many at once ----------------------------------------------------- */
+
+// tickAll is a box standing for several: ticked when every one is, a dash
+// when some are, and ticking it sets them all.
+function tickAll(items, isTicked, setTicked, label, redraw) {
+  const wrap = el("label", label ? "tick-all" : "tick-group");
+  const box = el("input");
+  box.type = "checkbox";
+  const ticked = items.filter(isTicked).length;
+  box.checked = items.length > 0 && ticked === items.length;
+  box.indeterminate = ticked > 0 && ticked < items.length;
+  box.title = "Tick or untick all of these";
+  box.addEventListener("change", () => {
+    for (const item of items) setTicked(item, box.checked);
+    redraw();
+    refreshPending();
+  });
+  wrap.append(box);
+  if (label) wrap.append(el("span", null, label));
+  return wrap;
+}
+
+const artistTicked = (source) => !state.detached.has(source.value);
+function setArtistTicked(source, on) {
+  if (on) state.detached.delete(source.value);
+  else state.detached.add(source.value);
+}
+
 /* The whole reduction on one screen ---------------------------------------- */
 
 $("summary-toggle").addEventListener("click", () => {
@@ -538,9 +564,13 @@ function renderMergeSummary() {
   }
 
   if (!byTarget.size) {
-    panel.append(el("div", "row-sub", "Nothing is being merged."));
+    panel.append(el("div", "row-sub", "Nothing to merge."));
     return;
   }
+
+  const every = [...byTarget.values()].flat();
+  panel.append(tickAll(every, artistTicked, setArtistTicked,
+    `Tick all — ${plural(every.length, "name")} under ${plural(byTarget.size, "artist")}`, renderArtists));
 
   const blocks = [...byTarget.entries()].sort((a, b) =>
     b[1].length - a[1].length || a[0].localeCompare(b[0]));
@@ -583,7 +613,8 @@ function summaryGroup(name, sources) {
   field.addEventListener("blur", commit);
 
   const ticked = sources.filter((source) => !state.detached.has(source.value)).length;
-  head.append(field, el("span", "count", `${ticked} of ${plural(sources.length, "name")}`));
+  head.append(tickAll(sources, artistTicked, setArtistTicked, "", renderArtists),
+    field, el("span", "count", `${ticked} of ${plural(sources.length, "name")}`));
   block.append(head);
 
   for (const source of sources) block.append(summaryRow(source, name));
@@ -849,22 +880,6 @@ $("albums-changed").addEventListener("click", () => {
   renderAlbums();
 });
 
-$("albums-all").addEventListener("click", () => {
-  state.albumDetached.clear();
-  state.albumArtistKept.clear();
-  renderAlbums();
-  refreshPending();
-});
-
-$("albums-none").addEventListener("click", () => {
-  for (const album of state.summary.albums) {
-    for (const source of album.sources) state.albumDetached.add(albumId(album.owner, source.value));
-  }
-  for (const group of albumGroups) state.albumArtistKept.add(group.id);
-  renderAlbums();
-  refreshPending();
-});
-
 // buildAlbumGroups works out the album list as it will be: every name in the
 // files under the album it folds into, unless it was kept apart, and two
 // albums of one artist renamed alike shown as one.
@@ -908,6 +923,13 @@ function buildAlbumGroups() {
     b.tracks.length - a.tracks.length || a.name.localeCompare(b.name) || a.artist.localeCompare(b.artist));
 }
 
+const albumTicked = (source) => !state.albumDetached.has(albumId(source.owner, source.value));
+function setAlbumTicked(source, on) {
+  const id = albumId(source.owner, source.value);
+  if (on) state.albumDetached.delete(id);
+  else state.albumDetached.add(id);
+}
+
 /* The whole album reduction on one screen --------------------------------- */
 
 $("album-summary-toggle").addEventListener("click", () => {
@@ -940,9 +962,23 @@ function renderAlbumMergeSummary() {
 
   const fixes = albumGroups.filter((g) => g.fix);
   if (!byTarget.size && !fixes.length) {
-    panel.append(el("div", "row-sub", "No album is being merged."));
+    panel.append(el("div", "row-sub", "Nothing to merge."));
     return;
   }
+
+  // One box for every suggestion here, merges and album artists alike.
+  const every = [
+    ...[...byTarget.values()].flatMap((b) => b.sources.map((source) => ({ source }))),
+    ...fixes.map((group) => ({ group })),
+  ];
+  panel.append(tickAll(every,
+    (item) => (item.source ? albumTicked(item.source) : state.albumArtistFixed.has(item.group.id)),
+    (item, on) => {
+      if (item.source) setAlbumTicked(item.source, on);
+      else if (on) state.albumArtistFixed.add(item.group.id);
+      else state.albumArtistFixed.delete(item.group.id);
+    },
+    `Tick all — ${plural(every.length, "suggestion")}`, renderAlbums));
 
   const blocks = [...byTarget.values()].sort((a, b) =>
     b.sources.length - a.sources.length || a.name.localeCompare(b.name));
@@ -955,21 +991,24 @@ function renderAlbumMergeSummary() {
 function albumFixGroup(fixes) {
   const block = el("div", "summary-group");
   const head = el("div", "summary-head");
-  head.append(el("b", null, "One album, one album artist"),
+  head.append(tickAll(fixes, (g) => state.albumArtistFixed.has(g.id), (g, on) => {
+    if (on) state.albumArtistFixed.add(g.id);
+    else state.albumArtistFixed.delete(g.id);
+  }, "", renderAlbums), el("b", null, "One album, one album artist"),
     el("span", "count", "a phone shows an album twice when its tracks disagree"));
   block.append(head);
 
   for (const group of fixes) {
     const row = el("label", "summary-row");
-    const kept = state.albumArtistKept.has(group.id);
+    const kept = !state.albumArtistFixed.has(group.id);
     if (kept) row.classList.add("off");
 
     const box = el("input");
     box.type = "checkbox";
     box.checked = !kept;
     box.addEventListener("change", () => {
-      if (box.checked) state.albumArtistKept.delete(group.id);
-      else state.albumArtistKept.add(group.id);
+      if (box.checked) state.albumArtistFixed.add(group.id);
+      else state.albumArtistFixed.delete(group.id);
       renderAlbums();
       refreshPending();
     });
@@ -1011,7 +1050,8 @@ function albumSummaryGroup({ owner, name, artist, sources }) {
   field.addEventListener("blur", commit);
 
   const ticked = sources.filter((s) => !state.albumDetached.has(albumId(s.owner, s.value))).length;
-  head.append(field, el("span", "count", `${artist} · ${ticked} of ${plural(sources.length, "name")}`));
+  head.append(tickAll(sources, albumTicked, setAlbumTicked, "", renderAlbums),
+    field, el("span", "count", `${artist} · ${ticked} of ${plural(sources.length, "name")}`));
   block.append(head);
 
   for (const source of sources) {
@@ -1163,7 +1203,7 @@ function albumArtistRules() {
   const albumArtistSet = {};
   const clearCompilation = [];
   for (const group of albumGroups) {
-    if (!group.fix || state.albumArtistKept.has(group.id)) continue;
+    if (!group.fix || !state.albumArtistFixed.has(group.id)) continue;
     for (const path of group.fix.paths) albumArtistSet[path] = group.fix.artist;
     clearCompilation.push(...group.fix.compilation);
   }
@@ -1251,7 +1291,7 @@ function albumRow(group) {
 
   const parts = [group.artist, tracks(group.tracks.length)];
   if (folded.length) parts.push(`${folded.length} folded in`);
-  if (group.fix && !state.albumArtistKept.has(group.id)) parts.push(fixText(group.fix));
+  if (group.fix && state.albumArtistFixed.has(group.id)) parts.push(fixText(group.fix));
   main.append(el("div", "row-sub", parts.join(" · ")));
 
   const details = el("button", "btn small", albumExpanded.has(group.id) ? "Hide" : "Details");
@@ -1271,7 +1311,7 @@ function albumRow(group) {
   block.append(head);
 
   if (albumExpanded.has(group.id)) block.append(albumDetails(group));
-  if (folded.length || (group.fix && !state.albumArtistKept.has(group.id))) block.classList.add("changed");
+  if (folded.length || (group.fix && state.albumArtistFixed.has(group.id))) block.classList.add("changed");
   return block;
 }
 

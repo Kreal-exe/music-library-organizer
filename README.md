@@ -34,15 +34,17 @@ about to happen.
 **Artists.** Every name in the files, reduced to the artist it belongs to:
 spellings of one name merged, guest credits detached from the lead, and any
 artist you want put under another one by hand. The heading above the list is a
-running total — *58 names in the files become 26 artists* — and opening it
-shows every single fold with a tick next to it. Untick what is wrong, or type
-a different artist into the heading and the ticked names go there instead.
+running total of what the ticks add up to, and beneath it every fold the tool
+suggests, each with a tick. Nothing is ticked until you tick it: tick the
+names that belong together, a whole artist at once or everything with *Tick
+all*, or type a different artist into the heading and the ticked names go
+there instead.
 
 **Albums.** The same for albums, always within one artist — two artists' *Greatest
 Hits* stay two albums. Spellings, word order, editions (*(Deluxe)*, *[Explicit]*,
 *- Single*, *(Remastered 2011)*), a shared-by watermark and discs filed as albums
-of their own (*(CD1)*, *(CD2)*) fold into one album, and a disc keeps its number
-as it rejoins. Untick a name to keep it apart, rename an album, or merge it into
+of their own (*(CD1)*, *(CD2)*) are offered as one album, and a disc keeps its
+number as it rejoins. Tick what should merge, rename an album, or merge it into
 another album by the same artist.
 
 **Tracks.** The whole library in one sortable table, the way a desktop player
