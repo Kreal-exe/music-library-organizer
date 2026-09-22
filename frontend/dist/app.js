@@ -469,7 +469,22 @@ let groups = [];
 // Which artists are expanded, by name, so a redraw keeps them open.
 const expanded = new Set();
 
+// keepingScroll redraws without moving anything under the pointer. Every tick
+// redraws the whole list, and the moment it is empty the scrolled panels fall
+// back to the top — so unticking a name far down the Details panel jumped it
+// to the first. Where each was scrolled to is put back afterwards.
+function keepingScroll(draw) {
+  const scrolled = [document.querySelector(".panel"), $("merge-summary"), $("album-merge-summary")];
+  const tops = scrolled.map((node) => node?.scrollTop ?? 0);
+  draw();
+  scrolled.forEach((node, i) => { if (node) node.scrollTop = tops[i]; });
+}
+
 function renderArtists() {
+  keepingScroll(drawArtists);
+}
+
+function drawArtists() {
   if (!state.summary) return;
 
   groups = buildGroups();
@@ -1182,6 +1197,10 @@ function albumRenames() {
 }
 
 function renderAlbums() {
+  keepingScroll(drawAlbums);
+}
+
+function drawAlbums() {
   if (!state.summary) return;
 
   albumGroups = buildAlbumGroups();
