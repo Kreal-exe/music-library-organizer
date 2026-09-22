@@ -851,16 +851,23 @@ func selectTracks(lib *library.Library, opts LyricsOptions) []tags.Track {
 	return out
 }
 
+// DeleteResult is what deleting came to: the files that are gone, or nothing
+// at all because the user said no.
+type DeleteResult struct {
+	Gone      []string `json:"gone"`
+	Cancelled bool     `json:"cancelled"`
+}
+
 // DeleteUnreadable removes files the scan could not read — damaged downloads,
 // most often, that a player cannot play either. Only files the last scan
 // reported as unreadable can go this way, whatever the interface asks for,
 // and it returns the ones that are gone.
-func (a *App) DeleteUnreadable(paths []string) ([]string, error) {
+func (a *App) DeleteUnreadable(paths []string) (DeleteResult, error) {
 	a.mu.Lock()
 	lib, phone := a.lib, a.phone
 	a.mu.Unlock()
 	if lib == nil {
-		return nil, errors.New("scan a library first")
+		return DeleteResult{}, errors.New("scan a library first")
 	}
 
 	unreadable := map[string]bool{}
@@ -874,7 +881,10 @@ func (a *App) DeleteUnreadable(paths []string) ([]string, error) {
 		}
 	}
 	if len(chosen) == 0 {
-		return []string{}, nil
+		return DeleteResult{Gone: []string{}}, nil
+	}
+	if !a.confirmDelete(chosen, phone != nil) {
+		return DeleteResult{Gone: []string{}, Cancelled: true}, nil
 	}
 
 	var gone []string
@@ -883,7 +893,7 @@ func (a *App) DeleteUnreadable(paths []string) ([]string, error) {
 		defer cancel()
 		var err error
 		if gone, err = phone.Delete(ctx, chosen); err != nil {
-			return nil, err
+			return DeleteResult{}, err
 		}
 	} else {
 		for _, path := range chosen {
@@ -910,7 +920,40 @@ func (a *App) DeleteUnreadable(paths []string) ([]string, error) {
 	if gone == nil {
 		gone = []string{}
 	}
-	return gone, nil
+	return DeleteResult{Gone: gone}, nil
+}
+
+// confirmDelete asks once more, in a dialog of the system's own: the page's
+// confirm() shows nothing in the Mac's webview and answers no by itself, so a
+// button relying on it did nothing at all.
+func (a *App) confirmDelete(paths []string, onPhone bool) bool {
+	where := "from this computer"
+	if onPhone {
+		where = "from the phone"
+	}
+	names := make([]string, 0, 12)
+	for i, path := range paths {
+		if i == 12 {
+			names = append(names, fmt.Sprintf("…and %d more", len(paths)-12))
+			break
+		}
+		names = append(names, path)
+	}
+	noun := "files"
+	if len(paths) == 1 {
+		noun = "file"
+	}
+
+	answer, err := wr.MessageDialog(a.ctx, wr.MessageDialogOptions{
+		Type:          wr.QuestionDialog,
+		Title:         fmt.Sprintf("Delete %d %s %s?", len(paths), noun, where),
+		Message:       "This cannot be undone.\n\n" + strings.Join(names, "\n"),
+		Buttons:       []string{"Delete", "Cancel"},
+		DefaultButton: "Cancel",
+		CancelButton:  "Cancel",
+	})
+	// Windows ignores the buttons given and answers Yes or No.
+	return err == nil && (answer == "Delete" || answer == "Yes")
 }
 
 // RevealFile opens the system file manager with the file selected, which is

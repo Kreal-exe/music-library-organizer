@@ -1489,14 +1489,16 @@ $("broken-all").addEventListener("change", (event) => {
 $("broken-delete").addEventListener("click", async () => {
   const chosen = [...brokenTicked];
   if (!chosen.length) return;
-  const where = state.onPhone ? "from the phone" : "from this computer";
-  const sure = window.confirm(`Delete ${files(chosen.length)} ${where}? This cannot be undone.\n\n` +
-    chosen.slice(0, 12).join("\n") + (chosen.length > 12 ? `\n…and ${chosen.length - 12} more` : ""));
-  if (!sure) return;
-
+  // Go asks for confirmation in a system dialog, and deletes nothing when the
+  // answer is no.
   $("broken-delete").disabled = true;
   try {
-    const gone = (await go().DeleteUnreadable(chosen)) || [];
+    const result = await go().DeleteUnreadable(chosen);
+    if (result.cancelled) {
+      updateBrokenButtons();
+      return;
+    }
+    const gone = result.gone || [];
     const removed = new Set(gone);
     state.broken = state.broken.filter((f) => !removed.has(f.path));
     for (const path of gone) brokenTicked.delete(path);
