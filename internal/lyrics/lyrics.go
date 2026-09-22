@@ -241,9 +241,16 @@ func attempts(q Query) []Query {
 		}
 	}
 
+	// A file with no title in its tags still has one in its name: "10AGE -
+	// Близко.mp3" is searched for as Близко, as it would be if it were tagged.
+	title := strings.TrimSpace(q.Title)
+	if title == "" {
+		title = fileTitle
+	}
+
 	// The title may repeat the artist, and both readings of it are searched
 	// for with that taken off.
-	named := withoutLeadingArtist(strings.TrimSpace(q.Title), append(artists, q.Artist, fileArtist))
+	named := withoutLeadingArtist(title, append(artists, q.Artist, fileArtist))
 
 	// The recording's own words go into a search of their own, before the
 	// bare name: a database that has the session files it as "Everlasting
@@ -292,6 +299,20 @@ func attempts(q Query) []Query {
 		}
 	}
 	return out
+}
+
+// Searchable says whether a track gives a search anything to go on — an
+// artist and a title, from its tags or from its file name.
+func Searchable(q Query) bool { return len(attempts(q)) > 0 }
+
+// DisplayTitle is the title a track is searched for under: its own, or the one
+// its file name carries when the tags have none.
+func DisplayTitle(q Query) string {
+	if title := strings.TrimSpace(q.Title); title != "" {
+		return title
+	}
+	_, title := nameFromFile(q.Path)
+	return title
 }
 
 // How many searches one track is worth. Every reading beyond the first is only

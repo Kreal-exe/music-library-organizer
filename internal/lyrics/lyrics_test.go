@@ -501,3 +501,28 @@ func (s *titleStub) name() string { return "stub" }
 func (s *titleStub) search(_ context.Context, q Query) ([]Match, error) {
 	return s.byTitle[q.Title], nil
 }
+
+// A file with no title in its tags is searched for by the name of the file.
+func TestUntitledTrackIsSearchedByFileName(t *testing.T) {
+	q := Query{Artist: "10age", Path: "/sdcard/Music/10age/10AGE - Близко.mp3"}
+	if !Searchable(q) {
+		t.Fatal("a track named in its file was left out")
+	}
+	got := attempts(q)
+	if got[0].Title != "Близко" {
+		t.Errorf("searched for %q, expected Близко", got[0].Title)
+	}
+	if DisplayTitle(q) != "Близко" {
+		t.Errorf("DisplayTitle = %q", DisplayTitle(q))
+	}
+
+	// With no artist in the tags either, the file name supplies both.
+	both := attempts(Query{Path: "/sdcard/Music/Music/XXXTENTACION - ILOVEITWHENTHEYRUN.mp3"})
+	if len(both) == 0 || both[0].Artist != "XXXTENTACION" || both[0].Title != "ILOVEITWHENTHEYRUN" {
+		t.Errorf("attempts = %+v", both)
+	}
+
+	if Searchable(Query{}) {
+		t.Error("a track with nothing to go on was searchable")
+	}
+}

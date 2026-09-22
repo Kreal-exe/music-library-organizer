@@ -769,16 +769,15 @@ func (a *App) FetchLyrics(opts LyricsOptions) (LyricsReport, error) {
 
 // lookup finds lyrics for one track, returning what to show and what to write.
 func (a *App) lookup(ctx context.Context, track tags.Track) (LyricsResult, lyrics.Match) {
-	result := LyricsResult{Path: track.Path, Artist: track.Artist, Title: track.Title}
+	query := queryFor(track)
+	// The log names the track the way it was searched for, so one with an
+	// empty title shows the name from its file rather than nothing.
+	result := LyricsResult{Path: track.Path, Artist: track.Artist, Title: lyrics.DisplayTitle(query)}
+	if result.Artist == "" {
+		result.Artist = track.AlbumArtist
+	}
 
-	match, err := a.finder.Find(ctx, lyrics.Query{
-		Artist:      track.Artist,
-		AlbumArtist: track.AlbumArtist,
-		Title:       track.Title,
-		Album:       track.Album,
-		Duration:    track.Duration,
-		Path:        track.Path,
-	})
+	match, err := a.finder.Find(ctx, query)
 	switch {
 	case errors.Is(err, context.Canceled):
 		result.Status, result.Detail = "error", "cancelled"
@@ -828,6 +827,18 @@ func (a *App) LyricsFromLink(link string) (LyricsPreview, error) {
 	return LyricsPreview{Source: match.Source, URL: match.URL, Lyrics: match.Lyrics}, nil
 }
 
+// queryFor is what the lyrics sources are asked about one track.
+func queryFor(track tags.Track) lyrics.Query {
+	return lyrics.Query{
+		Artist:      track.Artist,
+		AlbumArtist: track.AlbumArtist,
+		Title:       track.Title,
+		Album:       track.Album,
+		Duration:    track.Duration,
+		Path:        track.Path,
+	}
+}
+
 // selectTracks narrows the collection down to the tracks a lyrics run covers.
 func selectTracks(lib *library.Library, opts LyricsOptions) []tags.Track {
 	wanted := map[string]bool{}
@@ -840,8 +851,10 @@ func selectTracks(lib *library.Library, opts LyricsOptions) []tags.Track {
 		if opts.OnlyMissing && track.HasLyrics {
 			continue
 		}
-		if track.Artist == "" || track.Title == "" {
-			continue // Nothing to search with.
+		// A track with nothing in its title is still searched for by the name
+		// of its file; only one that gives a search nothing at all is left out.
+		if !lyrics.Searchable(queryFor(track)) {
+			continue
 		}
 		if len(wanted) > 0 && !wanted[track.Artist] && !wanted[track.AlbumArtist] {
 			continue
