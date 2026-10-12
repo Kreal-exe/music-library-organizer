@@ -21,7 +21,6 @@ permissions:
 
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
-  WAILS: github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
 
 jobs:
   version:
@@ -59,13 +58,10 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - run: go install "$WAILS"
-
       # The same script a Windows computer builds with: the agent first,
       # then the application, in a copy of the project.
       - name: Build the application
         run: |
-          export PATH="$(go env GOPATH)/bin:$PATH"
           powershell -ExecutionPolicy Bypass -File build.ps1
           mkdir -p dist
           mv "Music Library Organizer.exe" \
@@ -89,14 +85,10 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - run: go install "$WAILS"
-
-      # The same target a Mac builds with locally: the agent, then one
+      # The same script a Mac builds with locally: the agent, then one
       # application for Apple Silicon and Intel, signed and zipped.
       - name: Build the application
-        run: |
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          make mac-zip
+        run: INSTALL_DIR="$RUNNER_TEMP/Applications" ./build.sh --zip
 
       - uses: actions/upload-artifact@v4
         with:
